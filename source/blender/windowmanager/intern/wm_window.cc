@@ -92,6 +92,19 @@
 #  include "BLI_threads.h"
 #endif
 
+/* OHOS PATCH 
+ *  引入 hilog 作为输出，其他环境下则什么也不做。*/
+#ifdef __OHOS__
+  #include <hilog/log.h>
+  #undef LOG_TAG
+  #define LOG_TAG "BlenderGPU"
+  #define LOGI(f, ...) OH_LOG_INFO(LOG_APP, f, ##__VA_ARGS__)
+  #define LOGE(f, ...) OH_LOG_ERROR(LOG_APP, f, ##__VA_ARGS__)
+#else
+  #define LOGI(f, ...) ((void)0)
+  #define LOGE(f, ...) ((void)0)
+#endif
+
 /* The global to talk to GHOST. */
 static GHOST_SystemHandle g_system = nullptr;
 #if !(defined(WIN32) || defined(__APPLE__))
@@ -826,15 +839,21 @@ static void wm_window_ghostwindow_add(wmWindowManager *wm,
     gpuSettings.flags |= GHOST_gpuStereoVisual;
   }
 
+  /* OHOS Patch
+   *  这个函数里会log一些变量的状态，没有实际逻辑修改。 */
+  LOGI("[wm_window] wm_window_ghostwindow_add: enter, win=%{public}p", (void*)win);
+  LOGI("[wm_window] win->sizex=%{public}d, win->sizey=%{public}d", win->sizex, win->sizey);
   if (G.debug & G_DEBUG_GPU) {
     gpuSettings.flags |= GHOST_gpuDebugContext;
   }
 
+LOGI("[wm_window] U.gpu_backend = %{public}d at wm_window line %{public}d.\n", U.gpu_backend, __LINE__);
   eGPUBackendType gpu_backend = GPU_backend_type_selection_get();
   gpuSettings.context_type = wm_ghost_drawing_context_type(gpu_backend);
   gpuSettings.preferred_device.index = U.gpu_preferred_index;
   gpuSettings.preferred_device.vendor_id = U.gpu_preferred_vendor_id;
   gpuSettings.preferred_device.device_id = U.gpu_preferred_device_id;
+LOGI("[wm_window] Context type = %{public}d at wm_window line %{public}d.\n", gpuSettings.context_type, __LINE__);
 
   int posx = 0;
   int posy = 0;

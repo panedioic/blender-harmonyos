@@ -26,6 +26,18 @@
 
 #include "view3d_intern.hh" /* own include */
 
+/* OHOS PATCH 
+ *  引入 hilog 作为输出，其他环境下则什么也不做。*/
+#ifdef __OHOS__
+  #include <hilog/log.h>
+  #undef LOG_TAG
+  #define LOG_TAG "BlenderGPU"
+  #define LOGI(f, ...) OH_LOG_INFO(LOG_APP, f, ##__VA_ARGS__)
+  #define LOGE(f, ...) OH_LOG_ERROR(LOG_APP, f, ##__VA_ARGS__)
+#else
+  #define LOGI(f, ...) ((void)0)
+  #define LOGE(f, ...) ((void)0)
+#endif
 /* -------------------------------------------------------------------- */
 /** \name View3D Navigation Gizmo Group
  * \{ */
@@ -208,6 +220,14 @@ static void WIDGETGROUP_navigate_setup(const bContext *C, wmGizmoGroup *gzgroup)
     }
 
     wmOperatorType *ot = WM_operatortype_find(info->opname, true);
+    
+/* OHOS PATCH 
+ *  防止 info 为 nullptr 导致的崩溃。
+ *  虽然现在 bug 已经被修复，但还是留在这里以防万一。*/
+if (!ot) {
+    LOGE("[Gizmo] operator '%{public}s' not found, skipping", info->opname);
+    continue;  // 或 return，取决于上下文
+}
 #ifndef WITH_PYTHON
     if (ot != nullptr)
 #endif

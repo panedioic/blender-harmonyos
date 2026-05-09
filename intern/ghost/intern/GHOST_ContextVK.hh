@@ -52,6 +52,9 @@ enum GHOST_TVulkanPlatformType {
 #ifdef WITH_GHOST_WAYLAND
   GHOST_kVulkanPlatformWayland = 2,
 #endif
+  /* OHOS PATCH
+  * 暂时写死，鸿蒙 vulkan 枚举 */
+  GHOST_kVulkanPlatformOHOS,
 };
 
 struct GHOST_ContextVK_WindowInfo {
@@ -210,6 +213,11 @@ class GHOST_ContextVK : public GHOST_Context {
     return true;
   }
 
+  /* OHOS PATCH
+   * Mark swapchain as needing recreation before next acquire.
+   * Must be called from the same thread that calls swapBuffers(). */
+  void markSwapchainDirty() { m_swapchain_dirty = true; }
+
  private:
 #ifdef _WIN32
   HWND m_hwnd;
@@ -255,4 +263,7 @@ class GHOST_ContextVK : public GHOST_Context {
   GHOST_TSuccess recreateSwapchain();
   GHOST_TSuccess initializeFrameData();
   GHOST_TSuccess destroySwapchain();
+  
+  /* OHOS PATCH */
+  bool m_swapchain_dirty = false;
 };

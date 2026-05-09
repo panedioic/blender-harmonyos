@@ -22,6 +22,10 @@
 #if defined(HAVE_MALLOC_STATS_H)
 #  include <malloc.h>
 #  define HAVE_MALLOC_STATS
+#elif defined(__OHOS__)
+/* OHOS PATCH
+ *  鸿蒙系统下引入 malloc.h */
+#  include <malloc.h>
 #elif defined(__FreeBSD__)
 #  include <malloc_np.h>
 #elif defined(__NetBSD__) || defined(__OpenBSD__)
@@ -53,7 +57,9 @@ size_t malloc_usable_size(void *ptr);
 #  define UNLIKELY(x) (x)
 #endif
 
-#if !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
+/* OHOS PATCH
+ *  看其他系统都有，顺手把鸿蒙也加上去了。或许鸿蒙不用改这里？ */
+#if !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__OHOS__)
 /* Needed for `memalign` on Linux and `_aligned_alloc` on Windows. */
 
 #  include <malloc.h>

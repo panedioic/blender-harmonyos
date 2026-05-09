@@ -1455,6 +1455,9 @@ void wm_homefile_read_ex(bContext *C,
       skip_flags |= BLO_READ_SKIP_USERDEF;
     }
   }
+  /* OHOS PATCH
+   *  再次强制修改使用 vulkan 后端 */
+  U.gpu_backend = GPU_BACKEND_VULKAN;
 
   if (success == false && filepath_startup_override && reports) {
     /* We can not return from here because wm is already reset. */

@@ -331,7 +331,21 @@ if(WITH_PYTHON_MODULE)
   endif()
 
 else()
-  add_executable(blender ${EXETYPE} ${SRC})
+  # /* OHOS Patch */
+  # 因为移植需要编译成动态链接库，所以这里先写死了。
+  # add_executable(blender ${EXETYPE} ${SRC})
+  # 编译成动态库
+  add_library(blender SHARED ${EXETYPE} ${SRC})
+  set_target_properties(blender PROPERTIES
+    CXX_VISIBILITY_PRESET default
+      C_VISIBILITY_PRESET   default
+      VISIBILITY_INLINES_HIDDEN OFF   # ← OHOS 下关掉
+      POSITION_INDEPENDENT_CODE ON
+  )
+  # 强制导出符号表可读
+  target_link_options(blender PRIVATE
+      "-Wl,--export-dynamic"
+  )
   if(WITH_CPU_CHECK)
     # blender_cpu_check *NEEDS* to be linked first, there can be no exceptions
     # to this, this is to ensure this will be the first code to run once the

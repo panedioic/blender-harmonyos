@@ -79,6 +79,19 @@
 
 #include "BLO_read_write.hh"
 
+/* OHOS PATCH */
+// 引入 hilog 作为输出，其他环境下则什么也不做。
+#ifdef __OHOS__
+  #include <hilog/log.h>
+  #undef LOG_TAG
+  #define LOG_TAG "BlenderGPU"
+  #define LOGI(f, ...) OH_LOG_INFO(LOG_APP, f, ##__VA_ARGS__)
+  #define LOGE(f, ...) OH_LOG_ERROR(LOG_APP, f, ##__VA_ARGS__)
+#else
+  #define LOGI(f, ...) ((void)0)
+  #define LOGE(f, ...) ((void)0)
+#endif
+
 static CLG_LogRef LOG = {"bke.material"};
 
 static void material_init_data(ID *id)
@@ -2057,7 +2070,15 @@ static void material_default_gpencil_init(Material **ma_p)
 static void material_default_surface_init(Material **ma_p)
 {
   Material *ma = material_default_create(ma_p, "Default Surface");
-
+    
+/* OHOS PATCH
+ *  增加空指针检查，防止崩溃 */
+    if (!ma) {
+        LOGE("[ERROR] material_default_create returned NULL!");
+        return;
+    }
+    
+    
   bNodeTree *ntree = blender::bke::node_tree_add_tree_embedded(
       nullptr, &ma->id, "Shader Nodetree", ntreeType_Shader->idname);
   ma->use_nodes = true;

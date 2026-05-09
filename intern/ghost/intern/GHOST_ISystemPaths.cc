@@ -17,6 +17,10 @@
 #else
 #  ifdef __APPLE__
 #    include "GHOST_SystemPathsCocoa.hh"
+#  elif defined(__OHOS__)         
+/* OHOS PATCH
+ *  增加鸿蒙系统 GHOST_SystemPathsOHOS */
+#    include "GHOST_SystemPathsOHOS.hh"
 #  else
 #    include "GHOST_SystemPathsUnix.hh"
 #  endif
@@ -33,6 +37,10 @@ GHOST_TSuccess GHOST_ISystemPaths::create()
 #else
 #  ifdef __APPLE__
     m_systemPaths = new GHOST_SystemPathsCocoa();
+#  elif defined(__OHOS__) 
+/* OHOS PATCH
+ *  使用鸿蒙系统 GHOST_SystemPathsOHOS */
+    m_systemPaths = new GHOST_SystemPathsOHOS();
 #  else
     m_systemPaths = new GHOST_SystemPathsUnix();
 #  endif

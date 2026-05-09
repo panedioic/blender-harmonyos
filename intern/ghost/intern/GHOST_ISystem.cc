@@ -15,7 +15,11 @@
 #include "GHOST_ISystem.hh"
 #include "GHOST_SystemHeadless.hh"
 
-#if defined(WITH_GHOST_X11) && defined(WITH_GHOST_WAYLAND)
+/* OHOS PATCH
+ *  增加鸿蒙系统 GHOST_SystemOHOS */
+#if defined(__OHOS__)
+# include "GHOST_SystemOHOS.hh"
+#elif defined(WITH_GHOST_X11) && defined(WITH_GHOST_WAYLAND)
 #  include "GHOST_SystemWayland.hh"
 #  include "GHOST_SystemX11.hh"
 #elif defined(WITH_GHOST_X11)
@@ -148,6 +152,20 @@ GHOST_TSuccess GHOST_ISystem::createSystem(bool verbose, [[maybe_unused]] bool b
 #elif defined(__APPLE__)
     backends_attempted.push_back({"COCOA"});
     m_system = new GHOST_SystemCocoa();
+#elif defined(__OHOS__)
+      /* OHOS PATCH
+       *  使用鸿蒙系统 GHOST_SystemOHOS */
+    backends_attempted.push_back({"OHOS"});
+    try {
+      m_system = new GHOST_SystemOHOS();
+    }
+    catch (const std::runtime_error &e) {
+      if (verbose) {
+        backends_attempted.back().failure_msg = e.what();
+      }
+      delete m_system;
+      m_system = nullptr;
+    }
 #endif
 
     if (m_system) {

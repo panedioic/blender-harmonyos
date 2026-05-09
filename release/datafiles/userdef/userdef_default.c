@@ -114,7 +114,9 @@ const UserDef U_default = {
 #ifdef __APPLE__
     .gpu_backend = GPU_BACKEND_METAL,
 #else
-    .gpu_backend = GPU_BACKEND_OPENGL,
+/* OHOS PATCH
+ *  鸿蒙只支持 vulkan 后端，这里改掉。虽然好像没有生效？ */
+    .gpu_backend = GPU_BACKEND_VULKAN,
 #endif
     .gpu_shader_workers = 0,
     .shader_compilation_method = USER_SHADER_COMPILE_THREAD,

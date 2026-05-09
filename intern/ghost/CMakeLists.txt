@@ -500,6 +500,19 @@ elseif(WIN32)
   endif()
 endif()
 
+# OHOS PATCH
+# 暂时写死，引入为 OHOS 编写的 GHOST 文件
+list(APPEND SRC
+  intern/GHOST_SystemOHOS.cc
+  intern/GHOST_WindowOHOS.cc
+  intern/GHOST_SystemPathsOHOS.cc    # ← 新增
+)
+list(APPEND INC
+  intern/GHOST_SystemOHOS.hh
+  intern/GHOST_WindowOHOS.hh
+  intern/GHOST_SystemPathsOHOS.hh    # ← 新增（如果 INC 里有 .hh 的话）
+)
+
 if(UNIX AND NOT APPLE)
   if(WITH_OPENGL_BACKEND)
     list(APPEND SRC

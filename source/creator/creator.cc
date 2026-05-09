@@ -98,6 +98,20 @@
 
 #include "creator_intern.h" /* Own include. */
 
+/* OHOS PATCH 
+ *  引入 hilog 作为输出，其他环境下则什么也不做。*/
+#ifdef __OHOS__
+  #include <hilog/log.h>
+  #undef LOG_TAG
+  #define LOG_TAG "BlenderGPU"
+  #define LOGI(f, ...) OH_LOG_INFO(LOG_APP, f, ##__VA_ARGS__)
+  #define LOGE(f, ...) OH_LOG_ERROR(LOG_APP, f, ##__VA_ARGS__)
+  #include <Python.h>
+#else
+  #define LOGI(f, ...) ((void)0)
+  #define LOGE(f, ...) ((void)0)
+#endif
+
 /* -------------------------------------------------------------------- */
 /** \name Local Defines
  * \{ */
@@ -597,3 +611,173 @@ void main_python_exit()
 #endif
 
 /** \} */
+
+/* OHOS Patch */
+#ifdef __OHOS__
+#include <stdio.h>
+#include "BKE_context.hh"
+#include "DNA_windowmanager_types.h"
+#include "GPU_platform.hh"  /* 或者直接用数值 */
+
+/* Blender_Step 循环中所需函数（之后考虑改为包含头文件） */
+void wm_window_events_process(const bContext *C);
+void wm_event_do_handlers(bContext *C);
+void wm_event_do_notifiers(bContext *C);
+void wm_draw_update(bContext *C);
+
+/* 保存原 main 里的核心上下文指针 */
+static bContext* g_C = NULL;
+
+/* 宿主传进来的 OHNativeWindow*，在 GHOST 创建 Vulkan surface 时会用到。
+extern "C" void* g_ghost_ohos_native_window = nullptr;
+extern "C" uint32_t g_ghost_ohos_win_w = 0;
+extern "C" uint32_t g_ghost_ohos_win_h = 0;
+
+/**
+ * SetNativeWindow
+ * ArkTS 侧向 Blender 侧传入 NativeWindow 用于之后渲染
+ */
+__attribute__((visibility("default")))
+extern "C" void Blender_SetNativeWindow(void* native_window,
+                                        uint32_t w, uint32_t h) {
+    g_ghost_ohos_native_window = native_window;
+    g_ghost_ohos_win_w = w;
+    g_ghost_ohos_win_h = h;
+}
+
+/* 强制使用 Vulkan 后端（避免 Blender 默认挑 OpenGL）（虽然好像并没有什么用） */
+static void force_vulkan_backend() {
+    // extern UserDef U;
+    U.gpu_backend = GPU_BACKEND_VULKAN;
+}
+
+/**
+ * Blender_Init
+ */
+__attribute__((visibility("default")))
+extern "C" int Blender_Init(int real_argc, const char** real_argv) {
+    // 消除未使用的参数警告
+    (void)real_argc;
+    (void)real_argv;
+
+    LOGI("====> [Blender SO] Blender_Init: starting engine...\n");
+    
+    /* ---- 构造一个假的 argv，满足 Blender 内部的各种初始化需求 ---- */
+    /* （后续考虑在鸿蒙侧直接传入真实的参数） */
+    const char* fake_argv[] = {
+        "blender",                  /* argv[0] = 程序名 */
+        "--factory-startup",        /* 跳过读取用户配置 */
+        "--gpu-backend", "vulkan",  /* 强制启用 vulkan 后端 */
+        NULL
+    };
+    int argc = 4;
+    const char** argv = fake_argv;
+
+    LOGI("  [1/10] MEM init...\n");
+    MEM_init_memleak_detection();
+    LOGI("  [2/10] CLG init...\n");
+    CLG_init();
+    CLG_fatal_fn_set(callback_clg_fatal);
+    main_callback_setup();
+    LOGI("  [3/10] Pre-CTX globals...\n");
+    BKE_blender_globals_init();
+    BKE_appdir_program_path_init(argv[0]);
+    BLI_threadapi_init();
+    LOGI("  [4/10] CTX_create...\n");
+    g_C = CTX_create();
+    LOGI("  [5/10] DNA + types...\n");
+    DNA_sdna_current_init();
+    BKE_cpp_types_init();
+    BKE_idtype_init();
+    BKE_modifier_init();
+    BKE_shaderfx_init();
+    BKE_volumes_init();
+    DEG_register_node_types();
+    BKE_brush_system_init();
+    RE_texture_rng_init();
+    BKE_callback_global_init();
+    LOGI("  [6/10] Factory + appdir...\n");
+    G.factory_startup = true;
+    G.background = false;
+    BKE_appdir_init();
+    BLI_task_scheduler_init();
+    IMB_init();
+    LOGI("  [7/10] RNA + RE + NodeSystem + Particle...\n");
+    RNA_init();
+    RE_engines_init();
+    blender::bke::node_system_init();
+    BKE_particle_init_rng();
+    LOGI("  [8/10] Font + Sound + Materials...\n");
+    BKE_vfont_builtin_register(datatoc_bfont_pfb, datatoc_bfont_pfb_size);
+    BKE_sound_init_once();
+    BKE_materials_init();
+    LOGI("  [9/10] Force vulkan backend and set Python Home...\n");
+    force_vulkan_backend();
+    /* 强制设定 Python Home*/
+    const char* ph = getenv("PYTHONHOME");
+    if (ph) {
+        wchar_t* wph = Py_DecodeLocale(ph, nullptr);
+        if (wph) {
+            Py_SetPythonHome(wph);
+            LOGI("[Blender_Init] Py_SetPythonHome called: %{public}s", ph);
+            // 注意：不要 PyMem_RawFree(wph)，Py_SetPythonHome 要求这块内存一直有效
+            // 用 static 保持生命周期
+            static wchar_t* s_wph = wph;
+            (void)s_wph;
+        }
+    }
+    LOGI("  [10/10] WM_init (will create GHOST Vulkan context)...\n");
+    WM_init(g_C, argc, argv);
+    LOGI("====> [Blender SO] Blender_Init: OK (Vulkan: %{public}d)\n", GPU_BACKEND_VULKAN);
+    return 0;
+}
+
+/**
+ * Blender_Step
+ */
+__attribute__((visibility("default")))
+extern "C" void Blender_Step(void) {
+    if (!g_C) {
+      LOGI("[FATAL] Main context is nullptr!\n");
+      return;
+    };
+    
+    wmWindowManager* wm = CTX_wm_manager(g_C);
+    
+    if (!wm || wm->windows.first == nullptr) {
+      LOGI("[FATAL] Window Manager is nullptr!\n");
+      return;
+    };
+
+    wm_window_events_process(g_C);
+    wm_event_do_handlers(g_C);
+    wm_event_do_notifiers(g_C);
+    wm_draw_update(g_C); 
+}
+
+/**
+ * Blender_IsRunning
+ */
+__attribute__((visibility("default")))
+extern "C" int Blender_IsRunning(void) {
+    if (!g_C) return 0;
+    
+    wmWindowManager* wm = CTX_wm_manager(g_C);
+    if (!wm) return 0;
+    
+    return (wm->windows.first == nullptr) ? 0 : 1;
+}
+
+/**
+ * Blender_Exit
+ */
+__attribute__((visibility("default")))
+extern "C" void Blender_Exit(void) {
+    LOGI("====> [Blender SO] Blender_Exit: shutting down...\n");
+    if (g_C) {
+        WM_exit(g_C, EXIT_SUCCESS);
+        g_C = NULL;
+    }
+    LOGI("====> [Blender SO] Blender_Exit: done.\n");
+}
+#endif

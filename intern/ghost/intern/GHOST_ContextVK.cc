@@ -8,6 +8,19 @@
 
 #include "GHOST_ContextVK.hh"
 
+/* OHOS PATCH */
+// 引入 hilog 作为输出，其他环境下则什么也不做。
+#ifdef __OHOS__
+  #include <hilog/log.h>
+  #undef LOG_TAG
+  #define LOG_TAG "BlenderGPU"
+  #define LOGI(f, ...) OH_LOG_INFO(LOG_APP, f, ##__VA_ARGS__)
+  #define LOGE(f, ...) OH_LOG_ERROR(LOG_APP, f, ##__VA_ARGS__)
+#else
+  #define LOGI(f, ...) ((void)0)
+  #define LOGE(f, ...) ((void)0)
+#endif
+
 #ifdef _WIN32
 #  include <vulkan/vulkan_win32.h>
 #elif defined(__APPLE__)
@@ -19,6 +32,32 @@
 #  ifdef WITH_GHOST_WAYLAND
 #    include <vulkan/vulkan_wayland.h>
 #  endif
+#endif
+
+/* OHOS PATCH 
+* 包含鸿蒙平台的 vulkan 头文件，并定义用于鸿蒙平台的相关结构体。
+*/
+#if defined(__OHOS__) || defined(BLENDER_OHOS)
+#include <vulkan/vulkan.h>
+/* 鸿蒙官方扩展：VK_OHOS_surface
+ *  - VkSurfaceCreateInfoOHOS { sType, pNext, flags, window }
+ *  - vkCreateSurfaceOHOS(instance, &ci, alloc, &surface) */
+#ifndef VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS
+#define VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS 1000456000
+#endif
+
+typedef struct VkSurfaceCreateInfoOHOS {
+    VkStructureType sType;
+    const void*     pNext;
+    VkFlags         flags;
+    void*           window;   /* OHNativeWindow* */
+} VkSurfaceCreateInfoOHOS;
+
+typedef VkResult (VKAPI_PTR *PFN_vkCreateSurfaceOHOS)(
+    VkInstance, const VkSurfaceCreateInfoOHOS*,
+    const VkAllocationCallbacks*, VkSurfaceKHR*);
+
+extern "C" void* g_ghost_ohos_native_window;
 #endif
 
 #include "vulkan/vk_ghost_api.hh"
@@ -237,187 +276,358 @@ class GHOST_DeviceVK {
     return true;
   }
 
-  void ensure_device(vector<const char *> &required_extensions,
-                     vector<const char *> &optional_extensions)
-  {
-    if (device != VK_NULL_HANDLE) {
-      return;
-    }
-    init_generic_queue_family();
+/* OHOS PATCH 
+* 整个重写 ensure_device 函数。
+* 原函数在鸿蒙平台无法正常创建 context，我直接让 ai帮改的，自己也没仔细看。
+*/
+//   void ensure_device(vector<const char *> &required_extensions,
+//                      vector<const char *> &optional_extensions)
+//   {
+//   LOGI("[GHOST_DeviceVK::ensure_device] enter\n");
+//     if (device != VK_NULL_HANDLE) {
+//     LOGI("[GHOST_DeviceVK::ensure_device] device already created\n");
+//       return;
+//     }
+//     init_generic_queue_family();
 
-    vector<VkDeviceQueueCreateInfo> queue_create_infos;
-    vector<const char *> device_extensions(required_extensions);
-    for (const char *optional_extension : optional_extensions) {
-      const bool extension_found = has_extensions({optional_extension});
-      if (extension_found) {
-        CLOG_INFO(&LOG, 2, "enable optional extension: `%s`", optional_extension);
-        device_extensions.push_back(optional_extension);
-      }
-      else {
-        CLOG_INFO(&LOG, 2, "optional extension not found: `%s`", optional_extension);
-      }
-    }
+//     vector<VkDeviceQueueCreateInfo> queue_create_infos;
+//     vector<const char *> device_extensions(required_extensions);
+//     for (const char *optional_extension : optional_extensions) {
+//       const bool extension_found = has_extensions({optional_extension});
+//       if (extension_found) {
+//         CLOG_INFO(&LOG, 2, "enable optional extension: `%s`", optional_extension);
+//         device_extensions.push_back(optional_extension);
+//       }
+//       else {
+//         CLOG_INFO(&LOG, 2, "optional extension not found: `%s`", optional_extension);
+//       }
+//     }
 
-    /* Check if the given extension name will be enabled. */
-    auto extension_enabled = [=](const char *extension_name) {
-      for (const char *device_extension_name : device_extensions) {
-        if (strcmp(device_extension_name, extension_name) == 0) {
-          return true;
-        }
-      }
-      return false;
-    };
+//     /* Check if the given extension name will be enabled. */
+//     auto extension_enabled = [=](const char *extension_name) {
+//       for (const char *device_extension_name : device_extensions) {
+//         if (strcmp(device_extension_name, extension_name) == 0) {
+//           return true;
+//         }
+//       }
+//       return false;
+//     };
 
-    float queue_priorities[] = {1.0f};
-    VkDeviceQueueCreateInfo graphic_queue_create_info = {};
-    graphic_queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    graphic_queue_create_info.queueFamilyIndex = generic_queue_family;
-    graphic_queue_create_info.queueCount = 1;
-    graphic_queue_create_info.pQueuePriorities = queue_priorities;
-    queue_create_infos.push_back(graphic_queue_create_info);
+//     float queue_priorities[] = {1.0f};
+//     VkDeviceQueueCreateInfo graphic_queue_create_info = {};
+//     graphic_queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+//     graphic_queue_create_info.queueFamilyIndex = generic_queue_family;
+//     graphic_queue_create_info.queueCount = 1;
+//     graphic_queue_create_info.pQueuePriorities = queue_priorities;
+//     queue_create_infos.push_back(graphic_queue_create_info);
 
-    VkPhysicalDeviceFeatures device_features = {};
-#ifndef __APPLE__
-    device_features.geometryShader = VK_TRUE;
-    /* MoltenVK supports logicOp, needs to be build with MVK_USE_METAL_PRIVATE_API. */
-    device_features.logicOp = VK_TRUE;
-#endif
-    device_features.dualSrcBlend = VK_TRUE;
-    device_features.imageCubeArray = VK_TRUE;
-    device_features.multiDrawIndirect = VK_TRUE;
-    device_features.multiViewport = VK_TRUE;
-    device_features.shaderClipDistance = VK_TRUE;
-    device_features.drawIndirectFirstInstance = VK_TRUE;
-    device_features.fragmentStoresAndAtomics = VK_TRUE;
-    device_features.samplerAnisotropy = features.features.samplerAnisotropy;
+//     VkPhysicalDeviceFeatures device_features = {};
+// #ifndef __APPLE__
+//     device_features.geometryShader = VK_TRUE;
+//     /* MoltenVK supports logicOp, needs to be build with MVK_USE_METAL_PRIVATE_API. */
+//     device_features.logicOp = VK_TRUE;
+// #endif
+//     device_features.dualSrcBlend = VK_TRUE;
+//     device_features.imageCubeArray = VK_TRUE;
+//     device_features.multiDrawIndirect = VK_TRUE;
+//     device_features.multiViewport = VK_TRUE;
+//     device_features.shaderClipDistance = VK_TRUE;
+//     device_features.drawIndirectFirstInstance = VK_TRUE;
+//     device_features.fragmentStoresAndAtomics = VK_TRUE;
+//     device_features.samplerAnisotropy = features.features.samplerAnisotropy;
 
-    VkDeviceCreateInfo device_create_info = {};
-    device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    device_create_info.queueCreateInfoCount = uint32_t(queue_create_infos.size());
-    device_create_info.pQueueCreateInfos = queue_create_infos.data();
-    device_create_info.enabledExtensionCount = uint32_t(device_extensions.size());
-    device_create_info.ppEnabledExtensionNames = device_extensions.data();
-    device_create_info.pEnabledFeatures = &device_features;
+//     VkDeviceCreateInfo device_create_info = {};
+//     device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+//     device_create_info.queueCreateInfoCount = uint32_t(queue_create_infos.size());
+//     device_create_info.pQueueCreateInfos = queue_create_infos.data();
+//     device_create_info.enabledExtensionCount = uint32_t(device_extensions.size());
+//     device_create_info.ppEnabledExtensionNames = device_extensions.data();
+//     device_create_info.pEnabledFeatures = &device_features;
 
-    std::vector<void *> feature_struct_ptr;
+//     std::vector<void *> feature_struct_ptr;
 
-    /* Enable vulkan 11 features when supported on physical device. */
-    VkPhysicalDeviceVulkan11Features vulkan_11_features = {};
-    vulkan_11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-    vulkan_11_features.shaderDrawParameters = features_11.shaderDrawParameters;
-    feature_struct_ptr.push_back(&vulkan_11_features);
+//     /* Enable vulkan 11 features when supported on physical device. */
+//     VkPhysicalDeviceVulkan11Features vulkan_11_features = {};
+//     vulkan_11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+//     vulkan_11_features.shaderDrawParameters = features_11.shaderDrawParameters;
+//     feature_struct_ptr.push_back(&vulkan_11_features);
 
-    /* Enable optional vulkan 12 features when supported on physical device. */
-    VkPhysicalDeviceVulkan12Features vulkan_12_features = {};
-    vulkan_12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    vulkan_12_features.shaderOutputLayer = features_12.shaderOutputLayer;
-    vulkan_12_features.shaderOutputViewportIndex = features_12.shaderOutputViewportIndex;
-    vulkan_12_features.bufferDeviceAddress = features_12.bufferDeviceAddress;
-    vulkan_12_features.timelineSemaphore = VK_TRUE;
-    feature_struct_ptr.push_back(&vulkan_12_features);
+//     /* Enable optional vulkan 12 features when supported on physical device. */
+//     VkPhysicalDeviceVulkan12Features vulkan_12_features = {};
+//     vulkan_12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+//     vulkan_12_features.shaderOutputLayer = features_12.shaderOutputLayer;
+//     vulkan_12_features.shaderOutputViewportIndex = features_12.shaderOutputViewportIndex;
+//     vulkan_12_features.bufferDeviceAddress = features_12.bufferDeviceAddress;
+//     vulkan_12_features.timelineSemaphore = VK_TRUE;
+//     feature_struct_ptr.push_back(&vulkan_12_features);
 
-    /* Enable provoking vertex. */
-    VkPhysicalDeviceProvokingVertexFeaturesEXT provoking_vertex_features = {};
-    provoking_vertex_features.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
-    provoking_vertex_features.provokingVertexLast = VK_TRUE;
-    feature_struct_ptr.push_back(&provoking_vertex_features);
+//     /* Enable provoking vertex. */
+//     VkPhysicalDeviceProvokingVertexFeaturesEXT provoking_vertex_features = {};
+//     provoking_vertex_features.sType =
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+//     provoking_vertex_features.provokingVertexLast = VK_TRUE;
+//     feature_struct_ptr.push_back(&provoking_vertex_features);
 
-    /* Enable dynamic rendering. */
-    VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering = {};
-    dynamic_rendering.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
-    dynamic_rendering.dynamicRendering = VK_TRUE;
-    if (extension_enabled(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&dynamic_rendering);
-    }
+//     /* Enable dynamic rendering. */
+//     VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering = {};
+//     dynamic_rendering.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+//     dynamic_rendering.dynamicRendering = VK_TRUE;
+//     if (extension_enabled(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&dynamic_rendering);
+//     }
 
-    VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT
-        dynamic_rendering_unused_attachments = {};
-    dynamic_rendering_unused_attachments.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT;
-    dynamic_rendering_unused_attachments.dynamicRenderingUnusedAttachments = VK_TRUE;
-    if (extension_enabled(VK_EXT_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&dynamic_rendering_unused_attachments);
-    }
+//     VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT
+//         dynamic_rendering_unused_attachments = {};
+//     dynamic_rendering_unused_attachments.sType =
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT;
+//     dynamic_rendering_unused_attachments.dynamicRenderingUnusedAttachments = VK_TRUE;
+//     if (extension_enabled(VK_EXT_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&dynamic_rendering_unused_attachments);
+//     }
 
-    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR dynamic_rendering_local_read = {};
-    dynamic_rendering_local_read.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
-    dynamic_rendering_local_read.dynamicRenderingLocalRead = VK_TRUE;
-    if (extension_enabled(VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&dynamic_rendering_local_read);
-    }
+//     VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR dynamic_rendering_local_read = {};
+//     dynamic_rendering_local_read.sType =
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
+//     dynamic_rendering_local_read.dynamicRenderingLocalRead = VK_TRUE;
+//     if (extension_enabled(VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&dynamic_rendering_local_read);
+//     }
 
-    /* VK_EXT_robustness2 */
-    VkPhysicalDeviceRobustness2FeaturesEXT robustness_2_features = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
-    if (extension_enabled(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)) {
-      robustness_2_features.nullDescriptor = features_robustness2.nullDescriptor;
-      feature_struct_ptr.push_back(&robustness_2_features);
-    }
+//     /* VK_EXT_robustness2 */
+//     VkPhysicalDeviceRobustness2FeaturesEXT robustness_2_features = {
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+//     if (extension_enabled(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)) {
+//       robustness_2_features.nullDescriptor = features_robustness2.nullDescriptor;
+//       feature_struct_ptr.push_back(&robustness_2_features);
+//     }
 
-    /* Query for Mainenance4 (core in Vulkan 1.3). */
-    VkPhysicalDeviceMaintenance4FeaturesKHR maintenance_4 = {};
-    maintenance_4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES_KHR;
-    maintenance_4.maintenance4 = VK_TRUE;
-    if (extension_enabled(VK_KHR_MAINTENANCE_4_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&maintenance_4);
-    }
+//     /* Query for Mainenance4 (core in Vulkan 1.3). */
+//     VkPhysicalDeviceMaintenance4FeaturesKHR maintenance_4 = {};
+//     maintenance_4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES_KHR;
+//     maintenance_4.maintenance4 = VK_TRUE;
+//     if (extension_enabled(VK_KHR_MAINTENANCE_4_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&maintenance_4);
+//     }
 
-    /* Swap-chain maintenance 1 is optional. */
-    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance_1 = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT, nullptr, VK_TRUE};
-    if (extension_enabled(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&swapchain_maintenance_1);
-      use_vk_ext_swapchain_maintenance_1 = true;
-    }
+//     /* Swap-chain maintenance 1 is optional. */
+//     VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance_1 = {
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT, nullptr, VK_TRUE};
+//     if (extension_enabled(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&swapchain_maintenance_1);
+//       use_vk_ext_swapchain_maintenance_1 = true;
+//     }
 
-    /* Descriptor buffers */
-    VkPhysicalDeviceDescriptorBufferFeaturesEXT descriptor_buffer = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT,
-        nullptr,
-        VK_TRUE,
-        VK_FALSE,
-        VK_FALSE,
-        VK_FALSE};
-    if (extension_enabled(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&descriptor_buffer);
-    }
+//     /* Descriptor buffers */
+//     VkPhysicalDeviceDescriptorBufferFeaturesEXT descriptor_buffer = {
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT,
+//         nullptr,
+//         VK_TRUE,
+//         VK_FALSE,
+//         VK_FALSE,
+//         VK_FALSE};
+//     if (extension_enabled(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&descriptor_buffer);
+//     }
 
-    /* Query and enable Fragment Shader Barycentrics. */
-    VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR fragment_shader_barycentric = {};
-    fragment_shader_barycentric.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR;
-    fragment_shader_barycentric.fragmentShaderBarycentric = VK_TRUE;
-    if (extension_enabled(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&fragment_shader_barycentric);
-    }
+//     /* Query and enable Fragment Shader Barycentrics. */
+//     VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR fragment_shader_barycentric = {};
+//     fragment_shader_barycentric.sType =
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR;
+//     fragment_shader_barycentric.fragmentShaderBarycentric = VK_TRUE;
+//     if (extension_enabled(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&fragment_shader_barycentric);
+//     }
 
-    /* VK_EXT_memory_priority */
-    VkPhysicalDeviceMemoryPriorityFeaturesEXT memory_priority = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT, nullptr, VK_TRUE};
-    if (extension_enabled(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&memory_priority);
-    }
+//     /* VK_EXT_memory_priority */
+//     VkPhysicalDeviceMemoryPriorityFeaturesEXT memory_priority = {
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT, nullptr, VK_TRUE};
+//     if (extension_enabled(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&memory_priority);
+//     }
 
-    /* VK_EXT_pageable_device_local_memory */
-    VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pageable_device_local_memory = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT,
-        nullptr,
-        VK_TRUE};
-    if (extension_enabled(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME)) {
-      feature_struct_ptr.push_back(&pageable_device_local_memory);
-    }
+//     /* VK_EXT_pageable_device_local_memory */
+//     VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT pageable_device_local_memory = {
+//         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT,
+//         nullptr,
+//         VK_TRUE};
+//     if (extension_enabled(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME)) {
+//       feature_struct_ptr.push_back(&pageable_device_local_memory);
+//     }
 
-    /* Link all registered feature structs. */
-    for (int i = 1; i < feature_struct_ptr.size(); i++) {
-      ((VkBaseInStructure *)(feature_struct_ptr[i - 1]))->pNext =
-          (VkBaseInStructure *)(feature_struct_ptr[i]);
-    }
+//     /* Link all registered feature structs. */
+//     for (int i = 1; i < feature_struct_ptr.size(); i++) {
+//       ((VkBaseInStructure *)(feature_struct_ptr[i - 1]))->pNext =
+//           (VkBaseInStructure *)(feature_struct_ptr[i]);
+//     }
 
-    device_create_info.pNext = feature_struct_ptr[0];
-    vkCreateDevice(physical_device, &device_create_info, nullptr, &device);
+//     device_create_info.pNext = feature_struct_ptr[0];
+//     vkCreateDevice(physical_device, &device_create_info, nullptr, &device);
+//   }
+
+void ensure_device(vector<const char *> &required_extensions,
+                   vector<const char *> &optional_extensions)
+{
+  LOGI("[GHOST_DeviceVK::ensure_device] enter\n");
+  if (device != VK_NULL_HANDLE) {
+    LOGI("[GHOST_DeviceVK::ensure_device] device already created\n");
+    return;
   }
+
+  LOGI("[GHOST_DeviceVK::ensure_device] calling init_generic_queue_family...\n");
+  init_generic_queue_family();
+  LOGI("[GHOST_DeviceVK::ensure_device] generic_queue_family=%{public}u\n", generic_queue_family);
+
+  if (generic_queue_family == UINT32_MAX) {
+    LOGE("[GHOST_DeviceVK::ensure_device] ERROR: no graphics queue family found!\n");
+    return;
+  }
+
+  vector<VkDeviceQueueCreateInfo> queue_create_infos;
+  vector<const char *> device_extensions(required_extensions);
+  
+  for (const char *optional_extension : optional_extensions) {
+    const bool extension_found = has_extensions({optional_extension});
+    if (extension_found) {
+      LOGI("[GHOST_DeviceVK::ensure_device] enabling optional extension: %s\n", optional_extension);
+      device_extensions.push_back(optional_extension);
+    }
+  }
+
+  LOGI("[GHOST_DeviceVK::ensure_device] total device_extensions: %{public}zu\n", 
+       device_extensions.size());
+
+  auto extension_enabled = [=](const char *extension_name) {
+    for (const char *device_extension_name : device_extensions) {
+      if (strcmp(device_extension_name, extension_name) == 0) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  float queue_priorities[] = {1.0f};
+  VkDeviceQueueCreateInfo graphic_queue_create_info = {};
+  graphic_queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+  graphic_queue_create_info.queueFamilyIndex = generic_queue_family;
+  graphic_queue_create_info.queueCount = 1;
+  graphic_queue_create_info.pQueuePriorities = queue_priorities;
+  queue_create_infos.push_back(graphic_queue_create_info);
+
+  /* ★ 关键修改：根据 GPU 实际支持的特性来设置，而不是盲目启用 */
+  VkPhysicalDeviceFeatures device_features = {};
+
+  /* 只启用 GPU 真正支持的特性 */
+  device_features.geometryShader = features.features.geometryShader;
+  device_features.dualSrcBlend = features.features.dualSrcBlend;  /* 检查 GPU 是否支持 */
+  device_features.logicOp = features.features.logicOp;  /* 检查 GPU 是否支持 */
+  device_features.imageCubeArray = features.features.imageCubeArray;
+  device_features.multiDrawIndirect = features.features.multiDrawIndirect;
+  device_features.multiViewport = features.features.multiViewport;
+  device_features.shaderClipDistance = features.features.shaderClipDistance;
+  device_features.drawIndirectFirstInstance = features.features.drawIndirectFirstInstance;
+  device_features.fragmentStoresAndAtomics = features.features.fragmentStoresAndAtomics;
+  device_features.samplerAnisotropy = features.features.samplerAnisotropy;
+
+  LOGI("[GHOST_DeviceVK::ensure_device] device_features (from GPU capabilities):\n");
+  LOGI("[GHOST_DeviceVK::ensure_device]   geometryShader=%{public}d\n", device_features.geometryShader);
+  LOGI("[GHOST_DeviceVK::ensure_device]   dualSrcBlend=%{public}d\n", device_features.dualSrcBlend);
+  LOGI("[GHOST_DeviceVK::ensure_device]   logicOp=%{public}d\n", device_features.logicOp);
+  LOGI("[GHOST_DeviceVK::ensure_device]   imageCubeArray=%{public}d\n", device_features.imageCubeArray);
+
+  VkDeviceCreateInfo device_create_info = {};
+  device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  device_create_info.queueCreateInfoCount = uint32_t(queue_create_infos.size());
+  device_create_info.pQueueCreateInfos = queue_create_infos.data();
+  device_create_info.enabledExtensionCount = uint32_t(device_extensions.size());
+  device_create_info.ppEnabledExtensionNames = device_extensions.data();
+  device_create_info.pEnabledFeatures = &device_features;
+
+  std::vector<void *> feature_struct_ptr;
+
+  /* 只启用 GPU 支持的 Vulkan 1.1 特性 */
+  VkPhysicalDeviceVulkan11Features vulkan_11_features = {};
+  vulkan_11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+  vulkan_11_features.shaderDrawParameters = features_11.shaderDrawParameters;
+  feature_struct_ptr.push_back(&vulkan_11_features);
+  LOGI("[GHOST_DeviceVK::ensure_device] vulkan_11: shaderDrawParameters=%{public}d\n",
+       vulkan_11_features.shaderDrawParameters);
+
+  /* 只启用 GPU 支持的 Vulkan 1.2 特性 */
+  VkPhysicalDeviceVulkan12Features vulkan_12_features = {};
+  vulkan_12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  vulkan_12_features.shaderOutputLayer = features_12.shaderOutputLayer;
+  vulkan_12_features.shaderOutputViewportIndex = features_12.shaderOutputViewportIndex;
+  vulkan_12_features.bufferDeviceAddress = features_12.bufferDeviceAddress;
+  vulkan_12_features.timelineSemaphore = features_12.timelineSemaphore;  /* 检查支持 */
+  feature_struct_ptr.push_back(&vulkan_12_features);
+  LOGI("[GHOST_DeviceVK::ensure_device] vulkan_12: timelineSemaphore=%{public}d bufferDeviceAddress=%{public}d\n",
+       vulkan_12_features.timelineSemaphore, vulkan_12_features.bufferDeviceAddress);
+
+  /* Enable provoking vertex - 但只有当 GPU 支持时 */
+  VkPhysicalDeviceProvokingVertexFeaturesEXT provoking_vertex_features = {};
+  provoking_vertex_features.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+  provoking_vertex_features.provokingVertexLast = VK_TRUE;
+  feature_struct_ptr.push_back(&provoking_vertex_features);
+
+  /* Enable dynamic rendering - 但只有当扩展存在时 */
+  VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering = {};
+  dynamic_rendering.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+  dynamic_rendering.dynamicRendering = VK_TRUE;
+  if (extension_enabled(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+    feature_struct_ptr.push_back(&dynamic_rendering);
+  }
+
+  /* VK_EXT_robustness2 - 只有当扩展存在时 */
+  VkPhysicalDeviceRobustness2FeaturesEXT robustness_2_features = {
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+  if (extension_enabled(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)) {
+    robustness_2_features.nullDescriptor = features_robustness2.nullDescriptor;
+    feature_struct_ptr.push_back(&robustness_2_features);
+  }
+
+  /* Maintenance4 - 只有当扩展存在时 */
+  VkPhysicalDeviceMaintenance4FeaturesKHR maintenance_4 = {};
+  maintenance_4.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES_KHR;
+  maintenance_4.maintenance4 = VK_TRUE;
+  if (extension_enabled(VK_KHR_MAINTENANCE_4_EXTENSION_NAME)) {
+    feature_struct_ptr.push_back(&maintenance_4);
+  }
+
+  /* Swapchain maintenance 1 */
+  VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance_1 = {
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT, nullptr, VK_TRUE};
+  if (extension_enabled(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)) {
+    feature_struct_ptr.push_back(&swapchain_maintenance_1);
+    use_vk_ext_swapchain_maintenance_1 = true;
+  }
+
+  /* Link all registered feature structs. */
+  for (int i = 1; i < feature_struct_ptr.size(); i++) {
+    ((VkBaseInStructure *)(feature_struct_ptr[i - 1]))->pNext =
+        (VkBaseInStructure *)(feature_struct_ptr[i]);
+  }
+
+  if (!feature_struct_ptr.empty()) {
+    device_create_info.pNext = feature_struct_ptr[0];
+  }
+
+  LOGI("[GHOST_DeviceVK::ensure_device] calling vkCreateDevice with %{public}u extensions and %{public}zu feature structs...\n",
+       device_create_info.enabledExtensionCount, feature_struct_ptr.size());
+  
+  VkResult result = vkCreateDevice(physical_device, &device_create_info, nullptr, &device);
+  
+  LOGI("[GHOST_DeviceVK::ensure_device] vkCreateDevice returned: %{public}d\n", (int)result);
+
+  if (result != VK_SUCCESS) {
+    LOGE("[GHOST_DeviceVK::ensure_device] ERROR: vkCreateDevice failed with result %{public}d\n", 
+         (int)result);
+    device = VK_NULL_HANDLE;
+    return;
+  }
+
+  LOGI("[GHOST_DeviceVK::ensure_device] device created successfully: %{public}p\n", (void*)device);
+}
 
   void init_generic_queue_family()
   {
@@ -452,6 +662,13 @@ class GHOST_DeviceVK {
  */
 static std::optional<GHOST_DeviceVK> vulkan_device;
 
+
+/* OHOS PATCH 
+* 部分 patch 了 ensure_vulkan_device 函数。
+* 原函数会检查设备的显卡，要求设备具备 dualSrcBlend, logicOp 等特性才允许正常使用。
+* 然而这些特性是当前绝大部分鸿蒙设备所不具备的。
+* 因此 patch 用到了这些特性的显卡也是未来工作的重点（todo）。
+*/
 static GHOST_TSuccess ensure_vulkan_device(VkInstance vk_instance,
                                            VkSurfaceKHR vk_surface,
                                            const GHOST_GPUDevice &preferred_device,
@@ -474,25 +691,35 @@ static GHOST_TSuccess ensure_vulkan_device(VkInstance vk_instance,
   for (const auto &physical_device : physical_devices) {
     GHOST_DeviceVK device_vk(vk_instance, physical_device);
     device_index++;
+    LOGI("[ensure_vulkan_device] checking device %{public}d\n", device_index);
+    LOGI("[ensure_vulkan_device]   deviceName: %{public}s\n", device_vk.properties.properties.deviceName);
 
     if (!device_vk.has_extensions(required_extensions)) {
+      LOGI("[ensure_vulkan_device]   SKIP: missing required extensions\n");
       continue;
     }
+    LOGI("[ensure_vulkan_device]   has required extensions OK\n");
     if (!blender::gpu::GPU_vulkan_is_supported_driver(physical_device)) {
+      LOGI("[ensure_vulkan_device]   SKIP: unsupported driver\n");
       continue;
     }
+    LOGI("[ensure_vulkan_device]   driver OK\n");
 
     if (vk_surface != VK_NULL_HANDLE) {
+      LOGI("[ensure_vulkan_device]   checking surface formats...\n");
       uint32_t format_count;
       vkGetPhysicalDeviceSurfaceFormatsKHR(
           device_vk.physical_device, vk_surface, &format_count, nullptr);
+      LOGI("[ensure_vulkan_device]   format_count=%{public}u\n", format_count);
 
       uint32_t present_count;
       vkGetPhysicalDeviceSurfacePresentModesKHR(
           device_vk.physical_device, vk_surface, &present_count, nullptr);
+      LOGI("[ensure_vulkan_device]   present_count=%{public}u\n", present_count);
 
       /* For now anything will do. */
       if (format_count == 0 || present_count == 0) {
+        LOGI("[ensure_vulkan_device]   SKIP: surface has no formats or present modes\n");
         continue;
       }
     }
@@ -502,9 +729,19 @@ static GHOST_TSuccess ensure_vulkan_device(VkInstance vk_instance,
       continue;
     }
 #else
-    if (!device_vk.features.features.geometryShader || !device_vk.features.features.dualSrcBlend ||
-        !device_vk.features.features.logicOp || !device_vk.features.features.imageCubeArray)
+  LOGI("[ensure_vulkan_device]   checking features: geometryShader=%{public}d dualSrcBlend=%{public}d logicOp=%{public}d imageCubeArray=%{public}d\n",
+         device_vk.features.features.geometryShader,
+         device_vk.features.features.dualSrcBlend,
+         device_vk.features.features.logicOp,
+         device_vk.features.features.imageCubeArray);
+  // if (!device_vk.features.features.geometryShader || !device_vk.features.features.dualSrcBlend ||
+  //       !device_vk.features.features.logicOp || !device_vk.features.features.imageCubeArray)
+  //   {
+  //     continue;
+  //   }
+  if (!device_vk.features.features.geometryShader || !device_vk.features.features.imageCubeArray)
     {
+      LOGI("[ensure_vulkan_device]   SKIP: missing required features\n");
       continue;
     }
 #endif
@@ -526,6 +763,8 @@ static GHOST_TSuccess ensure_vulkan_device(VkInstance vk_instance,
       default:
         break;
     }
+    LOGI("[ensure_vulkan_device]   device_score=%{public}d (type=%{public}d)\n",
+         device_score, (int)device_vk.properties.properties.deviceType);
     /* User has configured a preferred device. Add bonus score when vendor and device match. Driver
      * id isn't considered as drivers update more frequently and can break the device selection. */
     if (device_vk.properties.properties.deviceID == preferred_device.device_id &&
@@ -543,10 +782,12 @@ static GHOST_TSuccess ensure_vulkan_device(VkInstance vk_instance,
   }
 
   if (best_physical_device == VK_NULL_HANDLE) {
+    LOGE("[ensure_vulkan_device] ERROR: No suitable Vulkan Device found!\n");
     CLOG_ERROR(&LOG, "Error: No suitable Vulkan Device found!");
     return GHOST_kFailure;
   }
 
+  LOGI("[ensure_vulkan_device] creating vulkan_device...\n");
   vulkan_device.emplace(vk_instance, best_physical_device);
 
   return GHOST_kSuccess;
@@ -622,6 +863,16 @@ GHOST_TSuccess GHOST_ContextVK::swapBuffers()
 {
   if (m_swapchain == VK_NULL_HANDLE) {
     return GHOST_kFailure;
+  }
+  /* OHOS PATCH
+   * 鸿蒙侧调整窗口大小后，会将窗口标记为 m_swapchain_dirty
+   * 此时需要重建 swapchain，避免 OHOS 驱动在旧 buffer 上 SEGV。 */
+  if (m_swapchain_dirty) {
+    m_swapchain_dirty = false;
+    recreateSwapchain();
+    if (m_swapchain == VK_NULL_HANDLE) {
+      return GHOST_kFailure;
+    }
   }
 
   assert(vulkan_device.has_value() && vulkan_device->device != VK_NULL_HANDLE);
@@ -1159,6 +1410,10 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
   return VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
 #elif defined(__APPLE__)
   return VK_EXT_METAL_SURFACE_EXTENSION_NAME;
+#elif defined(__OHOS__) || defined(BLENDER_OHOS)
+    /* OHOS PATCH 
+     * 鸿蒙 Vulkan surface 扩展 */
+    return "VK_OHOS_surface";
 #else /* UNIX/Linux */
   switch (m_platform) {
 #  ifdef WITH_GHOST_X11
@@ -1184,6 +1439,10 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
   const bool use_window_surface = (m_hwnd != nullptr);
 #elif defined(__APPLE__)
   const bool use_window_surface = (m_metal_layer != nullptr);
+#elif defined(__OHOS__) || defined(BLENDER_OHOS)
+    /* OHOS PATCH
+     * 检查是否有有效的 native window */
+    const bool use_window_surface = (g_ghost_ohos_native_window != nullptr);
 #else /* UNIX/Linux */
   bool use_window_surface = false;
   switch (m_platform) {
@@ -1301,7 +1560,34 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
     info.flags = 0;
     info.pLayer = m_metal_layer;
     VK_CHECK(vkCreateMetalSurfaceEXT(instance, &info, nullptr, &m_surface));
-#else
+#elif defined(__OHOS__) || defined(BLENDER_OHOS)
+        /* OHOS PATCH 
+         * 鸿蒙 Vulkan surface 创建 */
+        if (!g_ghost_ohos_native_window) {
+            CLOG_ERROR(&LOG, "ERROR: g_ghost_ohos_native_window is nullptr");
+            return GHOST_kFailure;
+        }
+        auto vkCreateSurfaceOHOS_fn = 
+            (PFN_vkCreateSurfaceOHOS)vkGetInstanceProcAddr(
+                instance, "vkCreateSurfaceOHOS");
+        
+        if (!vkCreateSurfaceOHOS_fn) {
+            CLOG_ERROR(&LOG, 
+                "ERROR: vkCreateSurfaceOHOS not found (VK_OHOS_surface not supported)");
+            return GHOST_kFailure;
+        }
+        VkSurfaceCreateInfoOHOS createInfo{};
+        createInfo.sType  = (VkStructureType)VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS;
+        createInfo.window = g_ghost_ohos_native_window;
+        
+        VkResult result = vkCreateSurfaceOHOS_fn(instance, &createInfo, nullptr, &m_surface);
+        if (result != VK_SUCCESS) {
+            CLOG_ERROR(&LOG, "ERROR: vkCreateSurfaceOHOS failed: %s", 
+                vulkan_error_as_string(result));
+            return GHOST_kFailure;
+        }
+        CLOG_INFO(&LOG, 2, "OHOS Vulkan surface created successfully");
+#else /* UNIX/Linux (X11/Wayland) */
     switch (m_platform) {
 #  ifdef WITH_GHOST_X11
       case GHOST_kVulkanPlatformX11: {

@@ -172,7 +172,9 @@ static bool compile_ex(shaderc::Compiler &compiler,
   }
 
   shaderc::CompileOptions options;
-  bool do_optimize = true;
+  /* OHOS PATCH 
+  *  因为未知的 bug，暂时关闭 shader 的编译器优化。等未来再做研究。 */
+  bool do_optimize = false;
   options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
   if (G.debug & G_DEBUG_GPU_RENDERDOC) {
     do_optimize = false;

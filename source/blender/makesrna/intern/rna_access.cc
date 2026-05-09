@@ -70,6 +70,19 @@
 #include "rna_access_internal.hh"
 #include "rna_internal.hh"
 
+/* OHOS PATCH 
+ *  引入 hilog 作为输出，其他环境下则什么也不做。*/
+#ifdef __OHOS__
+  #include <hilog/log.h>
+  #undef LOG_TAG
+  #define LOG_TAG "BlenderGPU"
+  #define LOGI(f, ...) OH_LOG_INFO(LOG_APP, f, ##__VA_ARGS__)
+  #define LOGE(f, ...) OH_LOG_ERROR(LOG_APP, f, ##__VA_ARGS__)
+#else
+  #define LOGI(f, ...) ((void)0)
+  #define LOGE(f, ...) ((void)0)
+#endif
+
 static CLG_LogRef LOG = {"rna.access"};
 
 /* Init/Exit */
@@ -774,6 +787,20 @@ bool RNA_struct_is_a(const StructRNA *type, const StructRNA *srna)
 
 PropertyRNA *RNA_struct_find_property(PointerRNA *ptr, const char *identifier)
 {
+    /* OHOS PATCH 
+    *  防止空指针导致的崩溃。这在现在仍相当常见。而这些本不应出现。 */
+    if (!ptr) {
+        LOGE("[RNA] RNA_struct_find_property: ptr is NULL, identifier='%{public}s'", identifier ? identifier : "(null)");
+        return nullptr;
+    }
+    if (!ptr->type) {
+        LOGE("[RNA] RNA_struct_find_property: ptr->type is NULL, identifier='%{public}s'", identifier ? identifier : "(null)");
+        return nullptr;
+    }
+    if (!identifier) {
+        LOGE("[RNA] identifier: ptr- is NULL, identifier='%{public}s'", identifier ? identifier : "(null)");
+        return nullptr;
+    }
   if (identifier[0] == '[' && identifier[1] == '"') {
     /* id prop lookup, not so common */
     PropertyRNA *r_prop = nullptr;

@@ -50,6 +50,19 @@
 
 #include <mutex>
 
+/* OHOS PATCH 
+ *  引入 hilog 作为输出，其他环境下则什么也不做。*/
+#ifdef __OHOS__
+  #include <hilog/log.h>
+  #undef LOG_TAG
+  #define LOG_TAG "BlenderGPU"
+  #define LOGI(f, ...) OH_LOG_INFO(LOG_APP, f, ##__VA_ARGS__)
+  #define LOGE(f, ...) OH_LOG_ERROR(LOG_APP, f, ##__VA_ARGS__)
+#else
+  #define LOGI(f, ...) ((void)0)
+  #define LOGE(f, ...) ((void)0)
+#endif
+
 using namespace blender::gpu;
 
 static thread_local Context *active_ctx = nullptr;
@@ -446,14 +459,22 @@ bool GPU_backend_supported()
   return *g_backend_type_supported;
 }
 
+/* OHOS PATCH 
+ *  再次检测并强行更换渲染后端为 vulkan。*/
 static void gpu_backend_create()
 {
+  LOGI("[gpu_backend_create] g_backend_type=%{public}d (OPENGL=1, VULKAN=2, METAL=3)\n", 
+       (int)g_backend_type);
+  LOGI("[gpu_backend_create] U.gpu_backend=%{public}d\n", (int)U.gpu_backend);
   BLI_assert(g_backend == nullptr);
   BLI_assert(GPU_backend_supported());
+
+  g_backend_type = GPU_BACKEND_VULKAN;
 
   switch (g_backend_type) {
 #ifdef WITH_OPENGL_BACKEND
     case GPU_BACKEND_OPENGL:
+LOGE("[gpu_backend_create] Blender running at OpenGL!\n");
       g_backend = MEM_new<GLBackend>(__func__);
       break;
 #endif

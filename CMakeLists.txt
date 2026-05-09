@@ -1572,7 +1572,11 @@ endif()
 # - WIN32
 # - APPLE
 
-if(UNIX AND NOT APPLE)
+# PATCH OHOS
+# 增加了对鸿蒙系统的支持，新建了配置文件 platform_ohos.cmake
+if(OHOS)
+  include(platform_ohos)
+elseif(UNIX AND NOT APPLE)
   include(platform_unix)
 elseif(WIN32)
   include(platform_win32)

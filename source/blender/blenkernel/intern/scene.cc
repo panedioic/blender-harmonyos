@@ -207,7 +207,11 @@ static void scene_init_data(ID *id)
     pset->brush[PE_BRUSH_CUT].strength = 1.0f;
   }
 
-  STRNCPY(scene->r.engine, RE_engine_id_BLENDER_EEVEE_NEXT);
+  /* OHOS PATCH 
+   *  鸿蒙平台不支持 eevee 的部分新特性，暂时换成 workbench 渲染器。
+   *  eevee 渲染器未来再做适配（todo）。*/
+  // STRNCPY(scene->r.engine, RE_engine_id_BLENDER_EEVEE_NEXT);
+  STRNCPY(scene->r.engine, RE_engine_id_BLENDER_WORKBENCH);
 
   STRNCPY(scene->r.pic, U.renderdir);
 
