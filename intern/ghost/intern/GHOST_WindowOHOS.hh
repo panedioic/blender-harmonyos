@@ -23,17 +23,17 @@ class GHOST_SystemOHOS;
  */
 class GHOST_WindowOHOS : public GHOST_Window {
  public:
-  GHOST_WindowOHOS(GHOST_SystemOHOS *system,
-                   const char *title,
-                   int32_t left,
-                   int32_t top,
-                   uint32_t width,
-                   uint32_t height,
-                   GHOST_TWindowState state,
-                   GHOST_TDrawingContextType type,
-                   const bool stereoVisual,
-                   const bool is_debug,
-                   const GHOST_GPUDevice &preferred_device);
+  GHOST_WindowOHOS(GHOST_SystemOHOS *system, 
+                 const char *title, int32_t left, int32_t top, 
+                 uint32_t width, uint32_t height, 
+                 GHOST_TWindowState state, 
+                 GHOST_TDrawingContextType type, 
+                 bool stereoVisual, bool is_debug, 
+                 const GHOST_GPUDevice &preferred_device, 
+                 void *native_window,        /* ★ 新增 */ 
+                 int window_id);             /* ★ 新增 */ 
+
+int getWindowId() const { return m_window_id; }
 
   ~GHOST_WindowOHOS() override;
 
@@ -125,4 +125,6 @@ class GHOST_WindowOHOS : public GHOST_Window {
 
   // resize window
   std::atomic<bool> m_resize_pending{false};
+
+  int m_window_id = 0;
 };

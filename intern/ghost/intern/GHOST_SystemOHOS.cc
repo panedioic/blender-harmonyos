@@ -77,56 +77,109 @@ void GHOST_SystemOHOS::getAllDisplayDimensions(uint32_t &width, uint32_t &height
 }
 
 /* --- Windows --- */
+GHOST_IWindow *GHOST_SystemOHOS::createWindow(const char *title, 
+                                              int32_t left, int32_t top, 
+                                              uint32_t width, uint32_t height, 
+                                              GHOST_TWindowState state, 
+                                              GHOST_GPUSettings gpuSettings, 
+                                              const bool /*exclusive*/, 
+                                              const bool /*is_dialog*/, 
+                                              const GHOST_IWindow * /*parentWindow*/) 
 
-GHOST_IWindow *GHOST_SystemOHOS::createWindow(const char *title,
-                                              int32_t left,
-                                              int32_t top,
-                                              uint32_t width,
-                                              uint32_t height,
-                                              GHOST_TWindowState state,
-                                              GHOST_GPUSettings gpuSettings,
-                                              const bool /*exclusive*/,
-                                              const bool /*is_dialog*/,
-                                              const GHOST_IWindow * /*parentWindow*/)
-{
+{ 
+  LOGI("[GHOST_OHOS] createWindow enter (title=%{public}s w=%{public}u h=%{public}u)", 
+       title ? title : "(null)", width, height); 
+
+  gpuSettings.context_type = GHOST_kDrawingContextTypeVulkan; 
+  int win_id = -1; 
+  void *nw   = nullptr; 
+  uint32_t win_w = width, win_h = height; 
+  const bool is_main = m_records.empty(); 
+
+  LOGI("[GHOST_OHOS] createWindow: m_records.size=%{public}zu is_main=%{public}d",
+     m_records.size(), (int)is_main);
+  if (is_main) { 
+    /* 主窗口：沿用启动时宿主填的全局 native window */ 
+    if (!g_ghost_ohos_native_window) { 
+      LOGE("[GHOST_OHOS] main window: g_ghost_ohos_native_window == NULL"); 
+      return nullptr; 
+    } 
+
+    win_id = kMainWindowId; 
+    nw     = g_ghost_ohos_native_window; 
+    win_w  = g_ghost_ohos_win_w ? g_ghost_ohos_win_w : width; 
+    win_h  = g_ghost_ohos_win_h ? g_ghost_ohos_win_h : height; 
+
+    /* 直接登记为 ready */ 
+    std::lock_guard<std::mutex> lk(m_reg_mutex); 
+    WindowRecord rec; 
+    rec.id = win_id; 
+    rec.native_window = nw; 
+    rec.w = win_w; 
+    rec.h = win_h; 
+    rec.surface_ready = true; 
+    m_records[win_id] = rec; 
+  } 
+  else { 
+    /* 子窗口：请宿主创建，然后阻塞等待 surface */ 
+    if (!m_request_create) { 
+      LOGE("[GHOST_OHOS] SUB-WINDOW REQUESTED BUT m_request_create==nullptr "
+         "(did ArkTS call registerSubWindowCallback?)");
+      return nullptr; 
+    } 
     
-  LOGI("[GHOST_OHOS] createWindow enter\n");
-  LOGI("[GHOST_OHOS]   g_ghost_ohos_native_window = %{public}p\n", g_ghost_ohos_native_window);
-  LOGI("[GHOST_OHOS]   g_ghost_ohos_win_w = %{public}u\n", g_ghost_ohos_win_w);
-  LOGI("[GHOST_OHOS]   g_ghost_ohos_win_h = %{public}u\n", g_ghost_ohos_win_h);
-  LOGI("[GHOST_OHOS]   requested w=%{public}u h=%{public}u\n", width, height);
-  LOGI("[GHOST_OHOS]   context_type = %{public}d\n", (int)gpuSettings.context_type);
-  gpuSettings.context_type = GHOST_kDrawingContextTypeVulkan;
-  LOGI("[GHOST_OHOS]   context_type = %{public}d\n", (int)gpuSettings.context_type);
-  if (g_ghost_ohos_native_window == nullptr) {
-    fprintf(stderr,
-            "GHOST_SystemOHOS::createWindow: native window not set yet. "
-            "Make sure Blender_SetNativeWindow() was called before WM_init.\n");
-    return nullptr;
-  }
+    win_id = allocateSubWindowId(width, height); 
+    LOGI("[GHOST_OHOS] calling host_request_create(id=%{public}d w=%{public}u h=%{public}u title=%{public}s)",
+        win_id, width, height, title ? title : "(null)");
+    m_request_create(win_id, int(width), int(height), title ? title : "Blender"); 
+    LOGI("[GHOST_OHOS] waitForSurface(id=%{public}d, 5000ms)...", win_id);
+    WindowRecord *rec = waitForSurface(win_id, /*timeout_ms=*/5000); 
 
-  GHOST_WindowOHOS *window = new GHOST_WindowOHOS(
-      this,
-      title,
-      left,
-      top,
-      width,
-      height,
-      state,
-      gpuSettings.context_type,
-      (gpuSettings.flags & GHOST_gpuStereoVisual) != 0,
-      (gpuSettings.flags & GHOST_gpuDebugContext) != 0,
-      gpuSettings.preferred_device);
+    if (!rec) { 
+      LOGE("[GHOST_OHOS] waitForSurface TIMEOUT id=%{public}d", win_id);
+      if (m_request_destroy) m_request_destroy(win_id); 
+      std::lock_guard<std::mutex> lk(m_reg_mutex); 
+      m_records.erase(win_id); 
+      return nullptr; 
+    } 
 
-  if (!window->getValid()) {
-    delete window;
-    return nullptr;
-  }
+    nw    = rec->native_window; 
+    win_w = rec->w; 
+    win_h = rec->h; 
+    LOGI("[GHOST_OHOS] waitForSurface OK id=%{public}d nw=%{public}p",
+       win_id, rec->native_window);
+    LOGI("[GHOST_OHOS] sub-window %{public}d ready nw=%{public}p %{public}ux%{public}u", 
+         win_id, nw, win_w, win_h); 
+  } 
 
-  m_windowManager->addWindow(window);
-  m_windowManager->setActiveWindow(window);
-  pushEvent(new GHOST_Event(getMilliSeconds(), GHOST_kEventWindowSize, window));
-  return window;
+  GHOST_WindowOHOS *window = new GHOST_WindowOHOS( 
+      this, title, left, top, win_w, win_h, state, 
+      gpuSettings.context_type, 
+      (gpuSettings.flags & GHOST_gpuStereoVisual) != 0, 
+      (gpuSettings.flags & GHOST_gpuDebugContext) != 0, 
+      gpuSettings.preferred_device, 
+      /*native_window=*/nw, 
+      /*window_id=*/win_id); 
+
+  if (!window->getValid()) { 
+    LOGE("[GHOST_OHOS] window %{public}d not valid, cleaning up", win_id); 
+    delete window; 
+    if (!is_main && m_request_destroy) m_request_destroy(win_id); 
+    std::lock_guard<std::mutex> lk(m_reg_mutex); 
+    m_records.erase(win_id); 
+    return nullptr; 
+  } 
+
+  { 
+    std::lock_guard<std::mutex> lk(m_reg_mutex); 
+    m_records[win_id].ghost_window = window; 
+  } 
+
+  m_windowManager->addWindow(window); 
+  m_windowManager->setActiveWindow(window); 
+  pushEvent(new GHOST_Event(getMilliSeconds(), GHOST_kEventWindowSize, window)); 
+
+  return window; 
 }
 
 GHOST_IContext *GHOST_SystemOHOS::createOffscreenContext(GHOST_GPUSettings gpuSettings)
@@ -177,70 +230,7 @@ GHOST_TSuccess GHOST_SystemOHOS::disposeContext(GHOST_IContext *context)
 /* ─────────────────────────────────────────────────────────────
  *  Input queue — UI-thread producers
  * ───────────────────────────────────────────────────────────── */
-void GHOST_SystemOHOS::postCursorMove(int32_t x, int32_t y)
-{
-  m_cursor_x.store(x, std::memory_order_relaxed);
-  m_cursor_y.store(y, std::memory_order_relaxed);
-  QueuedInput q{};
-  q.kind = QueuedInput::CURSOR_MOVE;
-  q.x = x;
-  q.y = y;
-  q.time_ms = getMilliSeconds();
-  std::lock_guard<std::mutex> lk(m_input_mutex);
-  if (!m_input_queue.empty() && m_input_queue.back().kind == QueuedInput::CURSOR_MOVE) {
-    m_input_queue.back() = q;
-  }
-  else {
-    m_input_queue.push_back(q);
-  }
-}
-void GHOST_SystemOHOS::postButtonEvent(bool pressed, GHOST_TButton button, int32_t x, int32_t y)
-{
-  m_cursor_x.store(x, std::memory_order_relaxed);
-  m_cursor_y.store(y, std::memory_order_relaxed);
-  const uint32_t bit = (1u << uint32_t(button));
-  if (pressed) m_button_mask.fetch_or(bit, std::memory_order_relaxed);
-  else         m_button_mask.fetch_and(~bit, std::memory_order_relaxed);
-  const uint64_t t = getMilliSeconds();
-  
-  QueuedInput mv{};
-  mv.kind = QueuedInput::CURSOR_MOVE;
-  mv.x = x; mv.y = y; mv.time_ms = t;
-  QueuedInput bt{};
-  bt.kind = pressed ? QueuedInput::BUTTON_DOWN : QueuedInput::BUTTON_UP;
-  bt.button = button;
-  bt.x = x; bt.y = y; bt.time_ms = t;
-  std::lock_guard<std::mutex> lk(m_input_mutex);
-  m_input_queue.push_back(mv);
-  m_input_queue.push_back(bt);
-}
-void GHOST_SystemOHOS::postTouchEvent(TouchPhase phase, int32_t touch_id, int32_t x, int32_t y)
-{
-  /* First-finger → left mouse button. Extra fingers are ignored for now. */
-  switch (phase) {
-    case TOUCH_DOWN: {
-      int32_t expected = -1;
-      if (m_primary_touch_id.compare_exchange_strong(expected, touch_id)) {
-        postButtonEvent(true, GHOST_kButtonMaskLeft, x, y);
-      }
-      break;
-    }
-    case TOUCH_MOVE: {
-      if (m_primary_touch_id.load(std::memory_order_relaxed) == touch_id) {
-        postCursorMove(x, y);
-      }
-      break;
-    }
-    case TOUCH_UP:
-    case TOUCH_CANCEL: {
-      int32_t expected = touch_id;
-      if (m_primary_touch_id.compare_exchange_strong(expected, -1)) {
-        postButtonEvent(false, GHOST_kButtonMaskLeft, x, y);
-      }
-      break;
-    }
-  }
-}
+ 
 /* ─────────────────────────────────────────────────────────────
  *  Input queue — render-thread consumer
  * ───────────────────────────────────────────────────────────── */
@@ -252,53 +242,62 @@ GHOST_IWindow *GHOST_SystemOHOS::getPrimaryWindow() const
   const std::vector<GHOST_IWindow *> &all = m_windowManager->getWindows();
   return all.empty() ? nullptr : all.front();
 }
-bool GHOST_SystemOHOS::drainInputQueue()
-{
-  std::deque<QueuedInput> local;
-  {
-    std::lock_guard<std::mutex> lk(m_input_mutex);
-    if (m_input_queue.empty()) return false;
-    local.swap(m_input_queue);
-  }
-  GHOST_IWindow *win = getPrimaryWindow();
-  if (!win) return false; /* Drop events until WM has a window. */
-  bool any = false;
-  for (const QueuedInput &ev : local) {
-    switch (ev.kind) {
-      case QueuedInput::CURSOR_MOVE:
-        pushEvent(new GHOST_EventCursor(ev.time_ms, GHOST_kEventCursorMove, win,
-                                        ev.x, ev.y, GHOST_TABLET_DATA_NONE));
-        any = true;
-        break;
-      case QueuedInput::BUTTON_DOWN:
-        pushEvent(new GHOST_EventButton(ev.time_ms, GHOST_kEventButtonDown, win,
-                                        ev.button, GHOST_TABLET_DATA_NONE));
-        any = true;
-        break;
-      case QueuedInput::BUTTON_UP:
-        pushEvent(new GHOST_EventButton(ev.time_ms, GHOST_kEventButtonUp, win,
-                                        ev.button, GHOST_TABLET_DATA_NONE));
-        any = true;
-        break;
-      case QueuedInput::KEY_DOWN: {
-        updateModifierFromKey(true, ev.key);
-        char utf8_buf[8] = {0};
-        if (ev.utf8_char) utf8_buf[0] = ev.utf8_char;
-        /* 参数顺序：time, type, window, key, is_repeat, utf8_buf */
-        pushEvent(new GHOST_EventKey(ev.time_ms, GHOST_kEventKeyDown, win, ev.key, false, utf8_buf));
-        any = true;
-        break;
-      }
-      case QueuedInput::KEY_UP: {
-        updateModifierFromKey(false, ev.key);
-        char utf8_buf[8] = {0};
-        pushEvent(new GHOST_EventKey(ev.time_ms, GHOST_kEventKeyUp, win, ev.key, false, utf8_buf));
-        any = true;
-        break;
-      }
-    }
-  }
-  return any;
+
+bool GHOST_SystemOHOS::drainInputQueue() 
+{ 
+  std::deque<QueuedInput> local; 
+  { 
+    std::lock_guard<std::mutex> lk(m_input_mutex); 
+    if (m_input_queue.empty()) return false; 
+    local.swap(m_input_queue); 
+  } 
+  bool any = false; 
+  for (const QueuedInput &ev : local) { 
+    GHOST_WindowOHOS *win = findGhostWindow(ev.window_id); 
+    if (!win) win = static_cast<GHOST_WindowOHOS *>(getPrimaryWindow()); 
+    if (!win) continue; 
+    switch (ev.kind) { 
+      case QueuedInput::CURSOR_MOVE: 
+        pushEvent(new GHOST_EventCursor(ev.time_ms, GHOST_kEventCursorMove, win, 
+                                        ev.x, ev.y, GHOST_TABLET_DATA_NONE)); 
+        any = true; 
+        break; 
+      case QueuedInput::BUTTON_DOWN: 
+        pushEvent(new GHOST_EventButton(ev.time_ms, GHOST_kEventButtonDown, win, 
+                                        ev.button, GHOST_TABLET_DATA_NONE)); 
+        any = true; 
+        break; 
+      case QueuedInput::BUTTON_UP: 
+        pushEvent(new GHOST_EventButton(ev.time_ms, GHOST_kEventButtonUp, win, 
+                                        ev.button, GHOST_TABLET_DATA_NONE)); 
+        any = true; 
+        break; 
+      case QueuedInput::KEY_DOWN: { 
+        updateModifierFromKey(true, ev.key); 
+        char utf8_buf[8] = {0}; 
+        if (ev.utf8_char) utf8_buf[0] = ev.utf8_char; 
+        pushEvent(new GHOST_EventKey(ev.time_ms, GHOST_kEventKeyDown, win, ev.key, false, utf8_buf)); 
+        any = true; 
+        break; 
+      } 
+      case QueuedInput::KEY_UP: { 
+        updateModifierFromKey(false, ev.key); 
+        char utf8_buf[8] = {0}; 
+        pushEvent(new GHOST_EventKey(ev.time_ms, GHOST_kEventKeyUp, win, ev.key, false, utf8_buf)); 
+        any = true; 
+        break; 
+      } 
+      case QueuedInput::RESIZE: { 
+        win->notifyResize(ev.rw, ev.rh); 
+        GHOST_Context *ctx = win->getContext(); 
+        if (ctx) static_cast<GHOST_ContextVK *>(ctx)->markSwapchainDirty(); 
+        pushEvent(new GHOST_Event(ev.time_ms, GHOST_kEventWindowSize, win)); 
+        any = true; 
+        break; 
+      } 
+    } 
+  } 
+  return any; 
 }
 
 bool GHOST_SystemOHOS::processEvents(bool waitForEvent)
@@ -469,7 +468,7 @@ static inline GHOST_SystemOHOS *ohos_system()
 extern "C" __attribute__((visibility("default")))
 void Blender_OnPointerEvent(int kind, int button, float fx, float fy)
 {
-    LOGI("[GHOST_SystemOHOS.cc] kind=%{public}d button=%{public}d xy=(%{public}.1f,%{public}.1f)", kind, button, fx, fy);
+    // LOGI("[GHOST_SystemOHOS.cc] kind=%{public}d button=%{public}d xy=(%{public}.1f,%{public}.1f)", kind, button, fx, fy);
   GHOST_SystemOHOS *sys = ohos_system();
   if (!sys) return;
   const int32_t x = (int32_t)fx;
@@ -537,32 +536,12 @@ const char *GHOST_SystemOHOS::getBinaryDir() const
     return nullptr;
 }
 
-void GHOST_SystemOHOS::postSurfaceResized(uint32_t width, uint32_t height)
-{
-  /* Latest-wins: repeated resizes during a drag collapse to the final size. */
-  m_pending_resize_w.store(width,  std::memory_order_relaxed);
-  m_pending_resize_h.store(height, std::memory_order_relaxed);
-  m_has_pending_resize.store(true, std::memory_order_release);
-}
-
 extern "C" __attribute__((visibility("default")))
 void Blender_OnSurfaceResize(uint32_t w, uint32_t h)
 {
   GHOST_SystemOHOS *sys = ohos_system();
   if (!sys) return;
   sys->postSurfaceResized(w, h);
-}
-
-void GHOST_SystemOHOS::postKeyEvent(bool pressed, GHOST_TKey ghost_key, char utf8_char)
-{
-  QueuedInput q{};
-  q.kind = pressed ? QueuedInput::KEY_DOWN : QueuedInput::KEY_UP;
-  q.key = ghost_key;
-  q.utf8_char = utf8_char;
-  q.time_ms = getMilliSeconds();
-
-  std::lock_guard<std::mutex> lk(m_input_mutex);
-  m_input_queue.push_back(q);
 }
 
 /* OHOS KeyCode → GHOST_TKey 映射表 */
@@ -693,4 +672,288 @@ void Blender_OnKeyEvent(int action, int keyCode, int metaState)
   }
 
   sys->postKeyEvent(pressed, ghost_key, ch);
+}
+
+// 新增子窗口注册/查询/等待方法:
+
+int GHOST_SystemOHOS::allocateSubWindowId(uint32_t w, uint32_t h) 
+{ 
+  std::lock_guard<std::mutex> lk(m_reg_mutex); 
+  int id = m_next_window_id++; 
+  WindowRecord rec; 
+  rec.id = id; 
+  rec.w  = w; 
+  rec.h  = h; 
+  rec.surface_ready = false; 
+  m_records[id] = rec; 
+  return id; 
+} 
+
+GHOST_SystemOHOS::WindowRecord* GHOST_SystemOHOS::waitForSurface(int id, int timeout_ms) 
+{ 
+  std::unique_lock<std::mutex> lk(m_reg_mutex); 
+  const bool ok = m_reg_cv.wait_for( 
+      lk, std::chrono::milliseconds(timeout_ms), 
+      [&]() { 
+        auto it = m_records.find(id); 
+        return it != m_records.end() && it->second.surface_ready; 
+      }); 
+  if (!ok) return nullptr; 
+  auto it = m_records.find(id); 
+  return (it == m_records.end()) ? nullptr : &it->second; 
+} 
+
+void GHOST_SystemOHOS::onSubWindowSurfaceReady(int id, void *nw, uint32_t w, uint32_t h) 
+{ 
+  LOGI("[GHOST_OHOS] onSubWindowSurfaceReady id=%{public}d nw=%{public}p %{public}ux%{public}u", 
+       id, nw, w, h); 
+  { 
+    std::lock_guard<std::mutex> lk(m_reg_mutex); 
+    auto it = m_records.find(id); 
+    if (it == m_records.end()) { 
+      /* 主窗口情况：宿主可能在启动阶段直接回传主 surface —— 建一条记录以便反查 */ 
+      WindowRecord rec; 
+      rec.id = id; 
+      rec.native_window = nw; 
+      rec.w = w; 
+      rec.h = h; 
+      rec.surface_ready = true; 
+      m_records[id] = rec; 
+    } else { 
+      it->second.native_window = nw; 
+      it->second.w = w; 
+      it->second.h = h; 
+      it->second.surface_ready = true; 
+    } 
+  } 
+  m_reg_cv.notify_all(); 
+} 
+
+void GHOST_SystemOHOS::onSubWindowClosed(int id) 
+{ 
+  LOGI("[GHOST_OHOS] onSubWindowClosed id=%{public}d", id); 
+  GHOST_WindowOHOS *w = nullptr; 
+
+  { 
+    std::lock_guard<std::mutex> lk(m_reg_mutex); 
+    auto it = m_records.find(id); 
+    if (it != m_records.end()) w = it->second.ghost_window; 
+  } 
+
+  if (w) { 
+    /* 走 Blender 常规的 WindowClose 事件；WM 会调用 disposeWindow */ 
+    pushEvent(new GHOST_Event(getMilliSeconds(), GHOST_kEventWindowClose, w)); 
+  } else { 
+    /* 还没绑定 ghost_window（超时被抛弃或竞态），直接删记录 */ 
+    std::lock_guard<std::mutex> lk(m_reg_mutex); 
+    m_records.erase(id); 
+  } 
+} 
+
+int GHOST_SystemOHOS::findWindowIdByNativeWindow(void *nw) const
+{ 
+  std::lock_guard<std::mutex> lk(m_reg_mutex); 
+  for (const auto &kv : m_records) { 
+    if (kv.second.native_window == nw) return kv.first; 
+  } 
+  return -1; 
+}
+
+// 改造事件入口 — 全部带 window_id 版
+
+void GHOST_SystemOHOS::postCursorMoveForId(int window_id, int32_t x, int32_t y) 
+{ 
+  m_cursor_x.store(x, std::memory_order_relaxed); 
+  m_cursor_y.store(y, std::memory_order_relaxed); 
+  QueuedInput q{}; 
+  q.kind = QueuedInput::CURSOR_MOVE; 
+  q.window_id = window_id; 
+  q.x = x; q.y = y; 
+  q.time_ms = getMilliSeconds(); 
+  std::lock_guard<std::mutex> lk(m_input_mutex); 
+  if (!m_input_queue.empty() 
+      && m_input_queue.back().kind == QueuedInput::CURSOR_MOVE
+      && m_input_queue.back().window_id == window_id) { 
+    m_input_queue.back() = q; 
+  } else { 
+    m_input_queue.push_back(q); 
+  } 
+} 
+
+void GHOST_SystemOHOS::postButtonEventForId(int window_id, bool pressed, 
+                                            GHOST_TButton button, int32_t x, int32_t y) 
+{ 
+  m_cursor_x.store(x, std::memory_order_relaxed); 
+  m_cursor_y.store(y, std::memory_order_relaxed); 
+  const uint32_t bit = (1u << uint32_t(button)); 
+  if (pressed) m_button_mask.fetch_or(bit, std::memory_order_relaxed); 
+  else         m_button_mask.fetch_and(~bit, std::memory_order_relaxed); 
+  const uint64_t t = getMilliSeconds(); 
+  QueuedInput mv{}, bt{}; 
+  mv.kind = QueuedInput::CURSOR_MOVE; mv.window_id = window_id; 
+  mv.x = x; mv.y = y; mv.time_ms = t; 
+  bt.kind = pressed ? QueuedInput::BUTTON_DOWN : QueuedInput::BUTTON_UP; 
+  bt.window_id = window_id; 
+  bt.button = button; bt.x = x; bt.y = y; bt.time_ms = t; 
+  std::lock_guard<std::mutex> lk(m_input_mutex); 
+  m_input_queue.push_back(mv); 
+  m_input_queue.push_back(bt); 
+} 
+
+void GHOST_SystemOHOS::postTouchEventForId(int window_id, TouchPhase phase, 
+                                           int32_t touch_id, int32_t x, int32_t y) 
+{ 
+  switch (phase) { 
+    case TOUCH_DOWN: { 
+      int32_t expected = -1; 
+      if (m_primary_touch_id.compare_exchange_strong(expected, touch_id)) 
+        postButtonEventForId(window_id, true, GHOST_kButtonMaskLeft, x, y); 
+      break; 
+    } 
+    case TOUCH_MOVE: 
+      if (m_primary_touch_id.load() == touch_id) 
+        postCursorMoveForId(window_id, x, y); 
+      break; 
+    case TOUCH_UP: 
+    case TOUCH_CANCEL: { 
+      int32_t expected = touch_id; 
+      if (m_primary_touch_id.compare_exchange_strong(expected, -1)) 
+        postButtonEventForId(window_id, false, GHOST_kButtonMaskLeft, x, y); 
+      break; 
+    } 
+  } 
+} 
+
+void GHOST_SystemOHOS::postKeyEventForId(int window_id, bool pressed, 
+                                         GHOST_TKey key, char utf8_char) 
+{
+  QueuedInput q{}; 
+  q.kind = pressed ? QueuedInput::KEY_DOWN : QueuedInput::KEY_UP; 
+  q.window_id = window_id; 
+  q.key = key; 
+  q.utf8_char = utf8_char; 
+  q.time_ms = getMilliSeconds(); 
+  std::lock_guard<std::mutex> lk(m_input_mutex); 
+  m_input_queue.push_back(q); 
+} 
+
+void GHOST_SystemOHOS::postSurfaceResizedForId(int window_id, uint32_t w, uint32_t h) 
+{ 
+  QueuedInput q{}; 
+  q.kind = QueuedInput::RESIZE; 
+  q.window_id = window_id; 
+  q.rw = w; q.rh = h; 
+  q.time_ms = getMilliSeconds(); 
+  std::lock_guard<std::mutex> lk(m_input_mutex); 
+  m_input_queue.push_back(q); 
+}
+
+// 保留旧无 id 版作为兼容 shim(内部调 id=0):
+void GHOST_SystemOHOS::postCursorMove(int32_t x, int32_t y) { 
+  postCursorMoveForId(kMainWindowId, x, y); 
+} 
+void GHOST_SystemOHOS::postButtonEvent(bool p, GHOST_TButton b, int32_t x, int32_t y) { 
+  postButtonEventForId(kMainWindowId, p, b, x, y); 
+} 
+void GHOST_SystemOHOS::postTouchEvent(TouchPhase ph, int32_t id, int32_t x, int32_t y) { 
+  postTouchEventForId(kMainWindowId, ph, id, x, y); 
+} 
+void GHOST_SystemOHOS::postKeyEvent(bool p, GHOST_TKey k, char c) { 
+  postKeyEventForId(kMainWindowId, p, k, c); 
+} 
+void GHOST_SystemOHOS::postSurfaceResized(uint32_t w, uint32_t h) { 
+  postSurfaceResizedForId(kMainWindowId, w, h); 
+}
+
+// 改造 drainInputQueue,按 window_id 查目标 window:
+// static GHOST_WindowOHOS *find_window_by_id_locked( GHOST_SystemOHOS *sys, int id) 
+// { 
+//   /* 通过 records 反查 */ 
+//   std::lock_guard<std::mutex> lk(sys->m_reg_mutex);   /* 需要把 m_reg_mutex/m_records 放 public 或加 friend/getter */ 
+//   auto it = sys->m_records.find(id); 
+//   return (it == sys->m_records.end()) ? nullptr : it->second.ghost_window; 
+// }
+
+GHOST_WindowOHOS *GHOST_SystemOHOS::findGhostWindow(int id) const
+{ 
+  std::lock_guard<std::mutex> lk(m_reg_mutex); 
+  auto it = m_records.find(id); 
+  return (it == m_records.end()) ? nullptr : it->second.ghost_window; 
+}
+
+void GHOST_SystemOHOS::onGhostWindowDestroyed(int id)
+{
+  {
+    std::lock_guard<std::mutex> lk(m_reg_mutex);
+    m_records.erase(id);
+  }
+  if (m_request_destroy) m_request_destroy(id);
+}
+
+// 新增导出 C API:
+extern "C" __attribute__((visibility("default"))) 
+void Blender_SetSubWindowHooks(void (*on_create)(int, int, int, const char *), 
+                               void (*on_destroy)(int)) 
+{ 
+  auto *sys = ohos_system(); 
+  if (sys) sys->setSubWindowHooks(on_create, on_destroy); 
+} 
+
+extern "C" __attribute__((visibility("default"))) 
+void Blender_OnSubWindowSurfaceReady(int id, void *nw, uint32_t w, uint32_t h) 
+{ 
+  auto *sys = ohos_system(); 
+  if (sys) sys->onSubWindowSurfaceReady(id, nw, w, h); 
+} 
+
+extern "C" __attribute__((visibility("default"))) 
+void Blender_OnSubWindowClosed(int id) 
+{ 
+  auto *sys = ohos_system(); 
+  if (sys) sys->onSubWindowClosed(id); 
+} 
+
+/* 带 window_id 的事件入口 */ 
+extern "C" __attribute__((visibility("default"))) 
+void Blender_OnPointerEventW(int window_id, int kind, int button, float fx, float fy) 
+{ 
+  auto *sys = ohos_system(); 
+  if (!sys) return; 
+  int32_t x = int32_t(fx), y = int32_t(fy); 
+  auto mouse_btn = [](int b) { 
+    switch (b) { case 1: return GHOST_kButtonMaskMiddle; 
+                 case 2: return GHOST_kButtonMaskRight; 
+                 default: return GHOST_kButtonMaskLeft; } 
+  }; 
+
+  switch (kind) { 
+    case 0:  sys->postCursorMoveForId(window_id, x, y); break; 
+    case 1:  sys->postButtonEventForId(window_id, true,  mouse_btn(button), x, y); break; 
+    case 2:  sys->postButtonEventForId(window_id, false, mouse_btn(button), x, y); break; 
+    case 10: sys->postTouchEventForId(window_id, GHOST_SystemOHOS::TOUCH_DOWN,   button, x, y); break; 
+    case 11: sys->postTouchEventForId(window_id, GHOST_SystemOHOS::TOUCH_MOVE,   button, x, y); break; 
+    case 12: sys->postTouchEventForId(window_id, GHOST_SystemOHOS::TOUCH_UP,     button, x, y); break; 
+    case 13: sys->postTouchEventForId(window_id, GHOST_SystemOHOS::TOUCH_CANCEL, button, x, y); break; 
+  } 
+} 
+
+extern "C" __attribute__((visibility("default"))) 
+void Blender_OnKeyEventW(int window_id, int action, int keyCode, int /*metaState*/) 
+{ 
+  auto *sys = ohos_system(); 
+  if (!sys) return; 
+  GHOST_TKey k = ohos_keycode_to_ghost(keyCode); 
+  if (k == GHOST_kKeyUnknown) return; 
+  char ch = '\0'; 
+  if (k >= GHOST_kKeyA && k <= GHOST_kKeyZ) ch = 'a' + (k - GHOST_kKeyA); 
+  else if (k >= GHOST_kKey0 && k <= GHOST_kKey9) ch = '0' + (k - GHOST_kKey0); 
+  else if (k == GHOST_kKeySpace) ch = ' '; 
+  sys->postKeyEventForId(window_id, action == 1, k, ch); 
+} 
+
+extern "C" __attribute__((visibility("default"))) 
+void Blender_OnSurfaceResizeW(int window_id, uint32_t w, uint32_t h) 
+{ 
+  auto *sys = ohos_system(); 
+  if (sys) sys->postSurfaceResizedForId(window_id, w, h); 
 }

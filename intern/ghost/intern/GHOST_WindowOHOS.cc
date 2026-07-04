@@ -31,65 +31,52 @@ extern uint32_t g_ghost_ohos_win_w;
 extern uint32_t g_ghost_ohos_win_h;
 }
 
-GHOST_WindowOHOS::GHOST_WindowOHOS(GHOST_SystemOHOS *system,
-                                   const char *title,
-                                   int32_t left,
-                                   int32_t top,
-                                   uint32_t width,
-                                   uint32_t height,
-                                   GHOST_TWindowState state,
-                                   GHOST_TDrawingContextType type,
-                                   const bool stereoVisual,
-                                   const bool is_debug,
-                                   const GHOST_GPUDevice &preferred_device)
-    : GHOST_Window(width, height, state, stereoVisual, false),
-      m_system(system),
-      m_nativeWindow(nullptr),
-      m_left(left),
-      m_top(top),
-      m_width(width),
-      m_height(height),
-      m_title(title ? title : "Blender"),
-      m_state(state),
-      m_is_debug_context(is_debug),
-      m_preferred_device(preferred_device),
-      m_valid_setup(false)
-{
-    LOGI("[GHOST_WindowOHOS] ctor: native_window=%{public}p\n", g_ghost_ohos_native_window);
-  /* Pick up the NativeWindow supplied by the NAPI host. */
-  m_nativeWindow = reinterpret_cast<OHNativeWindow *>(g_ghost_ohos_native_window);
+GHOST_WindowOHOS::GHOST_WindowOHOS(GHOST_SystemOHOS *system, 
+                                   const char *title, int32_t left, int32_t top, 
+                                   uint32_t width, uint32_t height, 
+                                   GHOST_TWindowState state, 
+                                   GHOST_TDrawingContextType type, 
+                                   const bool stereoVisual, const bool is_debug, 
+                                   const GHOST_GPUDevice &preferred_device, 
+                                   void *native_window, int window_id) 
+    : GHOST_Window(width, height, state, stereoVisual, false), 
+      m_system(system), 
+      m_nativeWindow(reinterpret_cast<OHNativeWindow *>(native_window)), 
+      m_left(left), m_top(top), 
+      m_width(width), m_height(height), 
+      m_title(title ? title : "Blender"), 
+      m_state(state), 
+      m_is_debug_context(is_debug), 
+      m_preferred_device(preferred_device), 
+      m_valid_setup(false), 
+      m_window_id(window_id) 
+{ 
+  LOGI("[GHOST_WindowOHOS] ctor id=%{public}d native_window=%{public}p", 
+       m_window_id, (void *)m_nativeWindow); 
+  if (!m_nativeWindow) { 
+    LOGE("[GHOST_WindowOHOS] ERROR: native_window is NULL for id=%{public}d", m_window_id); 
+    return; 
+  } 
+  if (setDrawingContextType(type) == GHOST_kSuccess) { 
+    m_valid_setup = true; 
+  } else { 
+    LOGE("[GHOST_WindowOHOS] setDrawingContextType FAILED id=%{public}d", m_window_id); 
+  } 
+  LOGI("[GHOST_WindowOHOS] CTOR DONE id=%{public}d ghost_this=%{public}p nw=%{public}p size=%{public}ux%{public}u",
+     m_window_id, (void*)this, (void*)m_nativeWindow, m_width, m_height);
 
-  if (m_nativeWindow == nullptr) {
-    LOGI("[GHOST_WindowOHOS] ERROR: native window is NULL\n");
-    fprintf(stderr,
-            "GHOST_WindowOHOS: no native window set. "
-            "Did you forget to call Blender_SetNativeWindow()?\n");
-    return;
-  }
-  LOGI("[GHOST_WindowOHOS] calling setDrawingContextType(%{public}d)\n", (int)type);
-
-  /* If the host already gave us the real surface size, prefer it. */
-  if (g_ghost_ohos_win_w && g_ghost_ohos_win_h) {
-    m_width = g_ghost_ohos_win_w;
-    m_height = g_ghost_ohos_win_h;
-  }
-
-  /* Spin up the drawing context (Vulkan). */
-  if (setDrawingContextType(type) == GHOST_kSuccess) {
-    LOGI("[GHOST_WindowOHOS] valid_setup = true\n");
-    m_valid_setup = true;
-  }
-  else {
-    LOGI("[GHOST_WindowOHOS] ERROR: setDrawingContextType FAILED\n");
-    fprintf(stderr, "GHOST_WindowOHOS: failed to create drawing context (type=%d)\n", int(type));
-  }
 }
 
 GHOST_WindowOHOS::~GHOST_WindowOHOS()
 {
+  LOGI("[GHOST_WindowOHOS] ~dtor id=%{public}d", m_window_id);
   releaseNativeHandles();
-  /* The OHNativeWindow* is owned by the ArkTS host; do NOT destroy it here. */
+  if (m_system && m_window_id != GHOST_SystemOHOS::kMainWindowId) {
+    LOGI("[GHOST_WindowOHOS] notify onGhostWindowDestroyed id=%{public}d", m_window_id);
+    m_system->onGhostWindowDestroyed(m_window_id);
+  }
 }
+
 
 GHOST_Context *GHOST_WindowOHOS::newDrawingContext(GHOST_TDrawingContextType type)
 {

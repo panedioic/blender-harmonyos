@@ -233,6 +233,10 @@ class GHOST_ContextVK : public GHOST_Context {
   wl_display *m_wayland_display;
   const GHOST_ContextVK_WindowInfo *m_wayland_window_info;
 #endif
+  /* OHOS PATCH: 每个 context 独立持有自己的 OHNativeWindow*,替代之前的全局。 */
+#if defined(__OHOS__) || defined(BLENDER_OHOS)
+  void *m_ohos_native_window = nullptr;
+#endif
 
   const int m_context_major_version;
   const int m_context_minor_version;

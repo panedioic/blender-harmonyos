@@ -14,6 +14,8 @@
 #include <deque>
 #include <mutex>
 #include <vector>
+#include <condition_variable>
+#include <unordered_map>
 
 class GHOST_WindowOHOS;
 
@@ -125,16 +127,46 @@ class GHOST_SystemOHOS : public GHOST_System {
   /** Single-touch ≡ left mouse button emulation (touch id = primary finger). */
   void postTouchEvent(TouchPhase phase, int32_t touch_id, int32_t x, int32_t y);
 
+  /* ─── OHOS 多窗口支持 ───────────────────────────────── */ 
+  /** 由宿主 (napi_init.cpp) 注册的两个 hook。都在 Blender 主线程被调， 
+   *  实现内部必须切到 UI 线程去操作 ArkTS 状态。 */ 
+  using RequestCreateSubWindowFn  = void (*)(int id, int w, int h, const char *title); 
+  using RequestDestroySubWindowFn = void (*)(int id); 
+  void setSubWindowHooks(RequestCreateSubWindowFn create_cb, 
+                         RequestDestroySubWindowFn destroy_cb) 
+  { 
+    m_request_create  = create_cb; 
+    m_request_destroy = destroy_cb; 
+  } 
+  /** 由宿主线程调用：新 XComponent 的 surface 已就绪。 */ 
+  void onSubWindowSurfaceReady(int id, void *native_window, uint32_t w, uint32_t h); 
+  /** 由宿主线程调用：某个子窗口的 surface 被销毁（用户关掉了 ArkTS 面板）。 */ 
+  void onSubWindowClosed(int id); 
+  /** 反向查询：native_window → window_id。事件回调里会用到。 */ 
+  int findWindowIdByNativeWindow(void *native_window) const; 
+  GHOST_WindowOHOS *findGhostWindow(int id) const;
+  void onGhostWindowDestroyed(int id);
+  /** 主窗口 id 常量。 */ 
+  static constexpr int kMainWindowId = 0; 
+  /* 事件按 id 分发版本 —— UI 线程调用 */ 
+  void postCursorMoveForId(int window_id, int32_t x, int32_t y); 
+  void postButtonEventForId(int window_id, bool pressed, GHOST_TButton b, int32_t x, int32_t y); 
+  void postTouchEventForId(int window_id, TouchPhase phase, int32_t touch_id, int32_t x, int32_t y); 
+  void postKeyEventForId(int window_id, bool pressed, GHOST_TKey k, char utf8_char); 
+  void postSurfaceResizedForId(int window_id, uint32_t w, uint32_t h); 
+
   // 先全都当成public处理
 //  private:
   /* Queued input from the UI thread, waiting to be dispatched on the render thread. */
   struct QueuedInput {
-    enum Kind { CURSOR_MOVE, BUTTON_DOWN, BUTTON_UP, KEY_DOWN, KEY_UP } kind;
+    enum Kind { CURSOR_MOVE, BUTTON_DOWN, BUTTON_UP, KEY_DOWN, KEY_UP, RESIZE } kind;
+    int window_id;          /* ★ 新增 */ 
     GHOST_TButton button;
     GHOST_TKey key;
     char utf8_char;
     int32_t x;
     int32_t y;
+    uint32_t rw, rh;        /* 用于 RESIZE */ 
     uint64_t time_ms;
   };
 
@@ -174,4 +206,25 @@ class GHOST_SystemOHOS : public GHOST_System {
   // key events
   GHOST_ModifierKeys m_modifierKeys;
   void updateModifierFromKey(bool pressed, GHOST_TKey key);
+
+  /* ─── OHOS 多窗口支持 ───────────────────────────────── */ 
+  struct WindowRecord { 
+    int id = -1; 
+    void *native_window = nullptr; 
+    uint32_t w = 0, h = 0; 
+    GHOST_WindowOHOS *ghost_window = nullptr;  /* 绑定后填 */ 
+    bool surface_ready = false;                /* onSubWindowSurfaceReady 后置位 */ 
+  }; 
+  mutable std::mutex m_reg_mutex; 
+  std::condition_variable m_reg_cv; 
+  std::unordered_map<int, WindowRecord> m_records; 
+  int m_next_window_id = 1;   /* 0 保留给主窗口 */ 
+  RequestCreateSubWindowFn  m_request_create  = nullptr; 
+  RequestDestroySubWindowFn m_request_destroy = nullptr; 
+  /** 分配一个新的子窗口 id，插入一条"pending"记录。 */ 
+  int allocateSubWindowId(uint32_t w, uint32_t h); 
+  /** 阻塞等待 `id` 对应的 surface 就绪。返回 nullptr 表示超时。 */ 
+  WindowRecord *waitForSurface(int id, int timeout_ms); 
+  /* QueuedInput 新增 window_id 字段（见 .cc） */
+
 };

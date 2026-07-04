@@ -829,6 +829,10 @@ GHOST_ContextVK::GHOST_ContextVK(bool stereoVisual,
       m_wayland_display(wayland_display),
       m_wayland_window_info(wayland_window_info),
 #endif
+#if defined(__OHOS__) || defined(BLENDER_OHOS)
+      /* OHOS PATCH: 复用 non-Windows/non-Apple 的 'window' 位置作为 OHNativeWindow*。 */
+      m_ohos_native_window(reinterpret_cast<void *>(window)),
+#endif
       m_context_major_version(contextMajorVersion),
       m_context_minor_version(contextMinorVersion),
       m_debug(debug),
@@ -1442,7 +1446,7 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
 #elif defined(__OHOS__) || defined(BLENDER_OHOS)
     /* OHOS PATCH
      * 检查是否有有效的 native window */
-    const bool use_window_surface = (g_ghost_ohos_native_window != nullptr);
+    const bool use_window_surface = (m_ohos_native_window != nullptr);
 #else /* UNIX/Linux */
   bool use_window_surface = false;
   switch (m_platform) {
@@ -1561,32 +1565,32 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
     info.pLayer = m_metal_layer;
     VK_CHECK(vkCreateMetalSurfaceEXT(instance, &info, nullptr, &m_surface));
 #elif defined(__OHOS__) || defined(BLENDER_OHOS)
-        /* OHOS PATCH 
-         * 鸿蒙 Vulkan surface 创建 */
-        if (!g_ghost_ohos_native_window) {
-            CLOG_ERROR(&LOG, "ERROR: g_ghost_ohos_native_window is nullptr");
-            return GHOST_kFailure;
-        }
-        auto vkCreateSurfaceOHOS_fn = 
-            (PFN_vkCreateSurfaceOHOS)vkGetInstanceProcAddr(
-                instance, "vkCreateSurfaceOHOS");
-        
-        if (!vkCreateSurfaceOHOS_fn) {
-            CLOG_ERROR(&LOG, 
-                "ERROR: vkCreateSurfaceOHOS not found (VK_OHOS_surface not supported)");
-            return GHOST_kFailure;
-        }
-        VkSurfaceCreateInfoOHOS createInfo{};
-        createInfo.sType  = (VkStructureType)VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS;
-        createInfo.window = g_ghost_ohos_native_window;
-        
-        VkResult result = vkCreateSurfaceOHOS_fn(instance, &createInfo, nullptr, &m_surface);
-        if (result != VK_SUCCESS) {
-            CLOG_ERROR(&LOG, "ERROR: vkCreateSurfaceOHOS failed: %s", 
-                vulkan_error_as_string(result));
-            return GHOST_kFailure;
-        }
-        CLOG_INFO(&LOG, 2, "OHOS Vulkan surface created successfully");
+    LOGI("[VK] creating OHOS surface (nw=%p) ...", m_ohos_native_window);
+    if (!m_ohos_native_window) {
+        CLOG_ERROR(&LOG, "ERROR: m_ohos_native_window is nullptr");
+        return GHOST_kFailure;
+    }
+    auto vkCreateSurfaceOHOS_fn = (PFN_vkCreateSurfaceOHOS)
+        vkGetInstanceProcAddr(instance, "vkCreateSurfaceOHOS");
+    if (!vkCreateSurfaceOHOS_fn) {
+        LOGE("[VK] vkCreateSurfaceOHOS_fn missing"); 
+        CLOG_ERROR(&LOG, "ERROR: vkCreateSurfaceOHOS not found");
+        return GHOST_kFailure;
+    }
+    VkSurfaceCreateInfoOHOS createInfo{};
+    createInfo.sType  = (VkStructureType)VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS;
+    createInfo.window = m_ohos_native_window;
+    VkResult result = vkCreateSurfaceOHOS_fn(instance, &createInfo, nullptr, &m_surface);
+    LOGI("[VK] vkCreateSurfaceOHOS result=%d surface=%p", (int)result, (void*)m_surface);
+    if (result != VK_SUCCESS) {
+        CLOG_ERROR(&LOG, "ERROR: vkCreateSurfaceOHOS failed: %s",
+                   vulkan_error_as_string(result));
+        return GHOST_kFailure;
+    }
+    CLOG_INFO(&LOG, 2, "OHOS Vulkan surface created successfully (nw=%p)", m_ohos_native_window);
+    LOGI("[VK] surface created: nw=%{public}p surface=%{public}p", m_ohos_native_window, (void*)m_surface);
+
+
 #else /* UNIX/Linux (X11/Wayland) */
     switch (m_platform) {
 #  ifdef WITH_GHOST_X11
